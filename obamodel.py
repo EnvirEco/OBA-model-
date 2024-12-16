@@ -143,24 +143,34 @@ class obamodel:
                 print(f"Updated Buyer {buyer_idx} - Remaining Deficit: {deficit}")
                 print(f"Updated Seller {seller_idx} - Remaining Surplus: {surplus}")
             
-    def summarize_market_supply_and_demand(self, year):
+    def calculate_dynamic_allowance_surplus_deficit(self, year):
         """
-        Summarize total market supply, demand, and net demand for the year.
+        Dynamically calculate Allowance Surplus/Deficit for each facility for the specified year.
+        This method ensures that the calculation is updated dynamically to reflect changes over the years.
+    
+        Parameters:
+        year (int): The current year of the simulation.
         """
-        total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-        total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-        net_demand = total_demand - total_supply
-        total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum()
-
-        summary = {
-            'Year': year,
-            'Total Supply (MTCO2e)': total_supply,
-            'Total Demand (MTCO2e)': total_demand,
-            'Net Demand (MTCO2e)': net_demand,
-            'Total Trade Volume (MTCO2e)': total_trade_volume,
-            'Allowance Price ($/MTCO2e)': self.market_price  # Add annual allowance price to summary
-        }
-        return summary
+        # Calculate dynamic values for Output, Emissions, and Benchmark
+        self.calculate_dynamic_values(year, self.start_year)
+        
+        # Verify required columns
+        required_columns = [f'Output_{year}', f'Benchmark_{year}', f'Emissions_{year}']
+        for col in required_columns:
+            if col not in self.facilities_data.columns:
+                raise KeyError(f"Missing required column for dynamic calculation: {col}")
+    
+        # Perform dynamic allowance allocation calculation
+        self.facilities_data[f'Allocations_{year}'] = (
+            self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}']
+        )
+        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
+            self.facilities_data[f'Allocations_{year}'] - self.facilities_data[f'Emissions_{year}']
+        )
+    
+        # Debug: Confirm dynamic allowance surplus/deficit calculation
+        print(f"Dynamic Allowance Surplus/Deficit calculated for {year}:")
+        print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
 
     def run_model(self, start_year, end_year):
         yearly_results = []
@@ -168,8 +178,7 @@ class obamodel:
         for year in range(start_year, end_year + 1):
             print(f"Running model for year {year}...")
     
-            self.calculate_dynamic_values(year, start_year)
-            self.calculate_allowance_allocation(year)
+            self.calculate_dynamic_allowance_surplus_deficit(year)  # Use the new method
             
             # Debug: Print allowance surplus/deficit
             print(f"Allowance Surplus/Deficit for {year}:")
