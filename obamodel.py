@@ -91,7 +91,7 @@ class obamodel:
                     cost = slope * abatement + intercept
                     self.facilities_data.at[index, f'Abatement Cost_{year}'] = cost
 
-      def trade_allowances(self, year):
+    def trade_allowances(self, year):
         """
         Simulate trading of allowances between facilities for the specified year.
         """
