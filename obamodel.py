@@ -192,6 +192,10 @@ class obamodel:
         """
         supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
         demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+        if demand == 0:
+            self.market_price = 0
+        else:
+            self.market_price = min(self.price_ceiling, max(10, 100 * (supply / demand)))
         return {
             'Year': year,
             'Supply': supply,
