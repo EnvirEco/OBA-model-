@@ -43,7 +43,7 @@ class obamodel:
         print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
 
 
-   def calculate_allowance_allocation(self, year):
+    def calculate_allowance_allocation(self, year):
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}']
         )
