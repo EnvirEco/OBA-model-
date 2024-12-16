@@ -199,7 +199,7 @@ class obamodel:
             'Market Price': self.market_price
         }
         
-        def run_model(self, start_year, end_year):
+    def run_model(self, start_year, end_year):
         yearly_results = []
     
         for year in range(start_year, end_year + 1):
