@@ -26,25 +26,21 @@ class obamodel:
         self.facilities_data['Allowance Price ($/MTCO2e)'] = 0.0
         self.facilities_data['Trade Volume'] = 0.0  # Initialize trade volume for safety
 
-    def calculate_dynamic_values(self, year, start_year):
-        """
-        Dynamically calculate Output, Emissions, and Benchmark for the given year.
-        Uses the baseline year values and growth rates to project values for the current year.
-
-        Parameters:
-        year (int): The current year of the simulation.
-        start_year (int): The starting year of the simulation.
-        """
+   def calculate_dynamic_values(self, year, start_year):
         years_since_start = year - start_year
-        dynamic_data = {
-            f'Output_{year}': self.facilities_data['Baseline Output'] * (1 + self.facilities_data['Output Growth Rate']) ** years_since_start,
-            f'Emissions_{year}': self.facilities_data['Baseline Emissions'] * (1 + self.facilities_data['Emissions Growth Rate']) ** years_since_start,
-            f'Benchmark_{year}': self.facilities_data['Baseline Benchmark'] * (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_since_start
-        }
-        self.facilities_data = pd.concat([self.facilities_data, pd.DataFrame(dynamic_data)], axis=1)
-
-        # Debug: Print available columns to verify dynamic fields
-        print(f"Dynamic values created for {year}: {list(self.facilities_data.columns)}")
+        self.facilities_data[f'Output_{year}'] = (
+            self.facilities_data['Baseline Output'] * (1 + self.facilities_data['Output Growth Rate']) ** years_since_start
+        )
+        self.facilities_data[f'Emissions_{year}'] = (
+            self.facilities_data['Baseline Emissions'] * (1 + self.facilities_data['Emissions Growth Rate']) ** years_since_start
+        )
+        self.facilities_data[f'Benchmark_{year}'] = (
+            self.facilities_data['Baseline Benchmark'] * (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_since_start
+        )
+    
+        # Debug: Check dynamic values
+        print(f"Dynamic values for {year}:")
+        print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
 
     def calculate_allowance_allocation(self, year):
         """
