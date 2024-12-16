@@ -65,7 +65,7 @@ class obamodel:
         }
         self.facilities_data = pd.concat([self.facilities_data, pd.DataFrame(allocation_data)], axis=1).copy()
 
-       def trade_allowances(self, year):
+    def trade_allowances(self, year):
         self.facilities_data[f'Trade Cost_{year}'] = 0.0
         self.facilities_data[f'Trade Volume_{year}'] = 0.0
     
