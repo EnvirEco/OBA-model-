@@ -1,0 +1,5 @@
+﻿Facility ID,Baseline Emissions,Baseline Output,Baseline Benchmark,Baseline Profit Rate,Output Growth Rate,Emissions Growth Rate,Benchmark Ratchet Rate
+F1,100,1000,0.1,0.1,0.02,0.02,-0.001
+F2,200,2000,0.1,0.1,0.02,0.02,-0.001
+F3,150,1500,0.1,0.1,0.02,0.02,-0.001
+F4,300,1200,0.25,0.1,0.02,0.02,-0.001
