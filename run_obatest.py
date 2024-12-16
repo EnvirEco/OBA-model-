@@ -13,8 +13,6 @@ abatement_cost_curve = pd.read_csv("abatement_cost_curve.csv")
 # Initialize the emissions trading model
 price_ceiling = 50  # Example price ceiling in $/MTCO2e
 
-model = obamodel(facilities_data, abatement_cost_curve, price_ceiling)
-
 # Include start_year in the model initialization
 start_year = 2025
 model = obamodel(facilities_data, abatement_cost_curve, price_ceiling, start_year)
