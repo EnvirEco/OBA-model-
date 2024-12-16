@@ -78,18 +78,28 @@ class obamodel:
         Calculate abatement costs for each facility based on the abatement cost curve.
         """
         self.facilities_data[f'Abatement Cost_{year}'] = 0.0
-        for index, row in self.facilities_data.iterrows():
-            facility_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
-            if not facility_curve.empty:
-                slope = facility_curve['Slope'].values[0]
-                intercept = facility_curve['Intercept'].values[0]
-                max_reduction = facility_curve['Max Reduction (MTCO2e)'].values[0]
-
-                surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
-                if surplus_deficit < 0:
-                    abatement = min(abs(surplus_deficit), max_reduction)
-                    cost = slope * abatement + intercept
-                    self.facilities_data.at[index, f'Abatement Cost_{year}'] = cost
+    
+        # Merge the facilities data with the abatement cost curve for vectorized operations
+        merged_data = pd.merge(self.facilities_data, self.abatement_cost_curve, on='Facility ID', how='left')
+    
+        # Only consider rows where surplus_deficit < 0
+        negative_deficit_mask = merged_data[f'Allowance Surplus/Deficit_{year}'] < 0
+        abatement_needed = merged_data[negative_deficit_mask]
+    
+        # Calculate abatement required and costs
+        abatement_needed[f'Abatement Required_{year}'] = abatement_needed.apply(
+            lambda row: min(abs(row[f'Allowance Surplus/Deficit_{year}']), row['Max Reduction (MTCO2e)']), axis=1
+        )
+        abatement_needed[f'Abatement Cost_{year}'] = abatement_needed.apply(
+            lambda row: row['Slope'] * row[f'Abatement Required_{year}'] + row['Intercept'], axis=1
+        )
+    
+        # Update the original facilities data
+        self.facilities_data.update(abatement_needed[[f'Abatement Cost_{year}']])
+    
+        # Debug: Print abatement costs for verification
+        print(f"Abatement costs calculated for {year}:")
+        print(self.facilities_data[[f'Abatement Cost_{year}']])
 
     def trade_allowances(self, year):
         """
