@@ -85,29 +85,29 @@ class obamodel:
             
             print(f"Final Market Price: {self.market_price}")
     
-        def calculate_abatement_costs(self, year):
-            """
-            Calculate abatement costs for each facility based on the abatement cost curve.
-            """
-            self.facilities_data[f'Abatement Cost_{year}'] = 0.0
-        
-            for index, row in self.facilities_data.iterrows():
-                facility_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
-                if not facility_curve.empty:
-                    slope = facility_curve['Slope'].values[0]
-                    intercept = facility_curve['Intercept'].values[0]
-                    max_reduction = facility_curve['Max Reduction (MTCO2e)'].values[0]
-        
-                    surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
-                    if surplus_deficit < 0:
-                        abatement = min(abs(surplus_deficit), max_reduction)
-                        cost = slope * abatement + intercept
-                        self.facilities_data.at[index, f'Abatement Cost_{year}'] = cost
-                        self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
-        
-            # Debug: Check abatement effectiveness
-            print(f"Year {year} - Post-Abatement Surplus/Deficit:")
-            print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
+    def calculate_abatement_costs(self, year):
+        """
+        Calculate abatement costs for each facility based on the abatement cost curve.
+        """
+        self.facilities_data[f'Abatement Cost_{year}'] = 0.0
+    
+        for index, row in self.facilities_data.iterrows():
+            facility_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
+            if not facility_curve.empty:
+                slope = facility_curve['Slope'].values[0]
+                intercept = facility_curve['Intercept'].values[0]
+                max_reduction = facility_curve['Max Reduction (MTCO2e)'].values[0]
+    
+                surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
+                if surplus_deficit < 0:
+                    abatement = min(abs(surplus_deficit), max_reduction)
+                    cost = slope * abatement + intercept
+                    self.facilities_data.at[index, f'Abatement Cost_{year}'] = cost
+                    self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
+    
+        # Debug: Check abatement effectiveness
+        print(f"Year {year} - Post-Abatement Surplus/Deficit:")
+        print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
 
     def trade_allowances(self, year):
         """
