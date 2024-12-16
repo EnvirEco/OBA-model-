@@ -1,31 +1,46 @@
 import pandas as pd
 
 class obamodel:
-    def __init__(self, facilities_data, abatement_cost_curve, price_ceiling, start_year):
+    def __init__(self, facilities_data, abatement_cost_curve, start_year):
         """
         Initialize the emissions trading model.
 
         Parameters:
         facilities_data (pd.DataFrame): Facility-level data with emissions, output, etc.
         abatement_cost_curve (pd.DataFrame): Abatement cost data per facility.
-        price_ceiling (float): Maximum allowable price for allowances ($/MTCO2e).
         start_year (int): The starting year of the simulation.
         """
         self.facilities_data = facilities_data
         self.abatement_cost_curve = abatement_cost_curve
-        self.price_ceiling = price_ceiling
-        self.start_year = start_year  # Store the start_yearself.market_price = None
+        self.start_year = start_year
+        self.market_price = 0.0  # Initialize market_price to 0.0
         self.government_revenue = 0.0
         self.facilities_data['Ceiling Price Payment'] = 0.0
         self.facilities_data['Tonnes Paid at Ceiling'] = 0.0
-        
+
         # Check if 'Tonnes Paid at Ceiling' column exists, if not, create it
         if 'Tonnes Paid at Ceiling' not in self.facilities_data.columns:
             self.facilities_data['Tonnes Paid at Ceiling'] = 0.0
-        
+
         self.facilities_data['Allowance Price ($/MTCO2e)'] = 0.0
         self.facilities_data['Trade Volume'] = 0.0  # Initialize trade volume for safety
 
+    def determine_market_price(self, supply, demand):
+        """
+        Set the market price for allowances based on supply and demand.
+        """
+        print(f"Market Price Calculation: Supply = {supply}, Demand = {demand}")
+
+        if demand <= 0:
+            self.market_price = 0
+        elif supply == 0:
+            self.market_price = float('inf')  # No supply, set price to a very high value
+        else:
+            supply_demand_ratio = supply / demand
+            self.market_price = max(10, 100 * (1 / supply_demand_ratio))
+
+        print(f"Determined Market Price: {self.market_price}")
+        
     def calculate_dynamic_values(self, year, start_year):
         years_since_start = year - start_year
         self.facilities_data[f'Output_{year}'] = (
@@ -50,23 +65,7 @@ class obamodel:
         }
         self.facilities_data = pd.concat([self.facilities_data, pd.DataFrame(allocation_data)], axis=1).copy()
 
-    def determine_market_price(self, supply, demand):
-        """
-        Set the market price for allowances based on supply and demand.
-        """
-        print(f"Market Price Calculation: Supply = {supply}, Demand = {demand}")
-    
-        if demand <= 0:
-            self.market_price = 0
-        elif supply == 0:
-            self.market_price = self.price_ceiling
-        else:
-            supply_demand_ratio = supply / demand
-            self.market_price = min(self.price_ceiling, max(10, 100 * (1 / supply_demand_ratio)))
-
-        print(f"Determined Market Price: {self.market_price}")
-
-    def trade_allowances(self, year):
+       def trade_allowances(self, year):
         self.facilities_data[f'Trade Cost_{year}'] = 0.0
         self.facilities_data[f'Trade Volume_{year}'] = 0.0
     
