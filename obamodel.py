@@ -55,7 +55,7 @@ class obamodel:
         for col in required_columns:
             if col not in self.facilities_data.columns:
                 raise KeyError(f"Missing required column for allocation calculation: {col}")
-
+    
         # Perform allocation calculation
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}']
@@ -63,9 +63,11 @@ class obamodel:
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
             self.facilities_data[f'Allocations_{year}'] - self.facilities_data[f'Emissions_{year}']
         )
+    
+        # Debug: Print details of surplus/deficit
+        print(f"Year {year}: Allocations and Surplus/Deficit Details:")
+        print(self.facilities_data[[f'Allocations_{year}', f'Emissions_{year}', f'Allowance Surplus/Deficit_{year}']].head())
 
-        # Debug: Confirm allocations creation
-        print(f"Allocations and Allowance Surplus/Deficit calculated for {year}.")
 
     def determine_market_price(self, supply, demand):
         """
@@ -131,7 +133,7 @@ class obamodel:
         sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
     
         # Debug: Buyers and sellers check
-        print(f"Year {year}: Buyers={len(buyers)}, Sellers={len(sellers)}")
+        print(f"Year {year}: Buyers Count: {buyers.shape[0]}, Sellers Count: {sellers.shape[0]}")
         if buyers.empty:
             print(f"Year {year}: No buyers detected. Check surplus/deficit calculations.")
         if sellers.empty:
@@ -149,7 +151,7 @@ class obamodel:
                 trade_volume = min(deficit, surplus)
                 trade_cost = trade_volume * self.market_price
     
-                # Update balances
+                # Update buyer and seller allowance balances
                 self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
                 self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
                 self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
@@ -158,13 +160,15 @@ class obamodel:
                 self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
                 self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
     
-                # Adjust remaining deficit/surplus
+                # Adjust remaining deficit and surplus
                 deficit -= trade_volume
                 surplus -= trade_volume
-                print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume={trade_volume}, Cost={trade_cost}")
+    
+                print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
     
                 if deficit <= 0:
                     break
+
             
     def calculate_dynamic_allowance_surplus_deficit(self, year):
         """
