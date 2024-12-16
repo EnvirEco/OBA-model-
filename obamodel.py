@@ -81,10 +81,7 @@ class obamodel:
     
         # Debug: Market price and conditions
         print(f"Year: Market Price: {self.market_price}, Supply: {supply}, Demand: {demand}")
-    
-            
-            print(f"Final Market Price: {self.market_price}")
-    
+
     def calculate_abatement_costs(self, year):
         """
         Calculate abatement costs for each facility based on the abatement cost curve.
