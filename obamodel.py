@@ -163,40 +163,33 @@ class obamodel:
         return summary
 
     def run_model(self, start_year, end_year):
-        """
-        Execute the full emissions trading model dynamically over multiple years.
-        """
         yearly_results = []
-
+    
         for year in range(start_year, end_year + 1):
             print(f"Running model for year {year}...")
-
-            # Step 1: Calculate dynamic values
+    
             self.calculate_dynamic_values(year, start_year)
-
-            # Step 2: Verify dynamic fields
-            required_dynamic_columns = [f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']
-            for col in required_dynamic_columns:
-                if col not in self.facilities_data.columns:
-                    raise KeyError(f"Dynamic field missing after calculate_dynamic_values: {col}")
-
-            # Step 3: Calculate allocations
             self.calculate_allowance_allocation(year)
-
-            # Step 4: Verify allocations
-            if f'Allocations_{year}' not in self.facilities_data.columns:
-                raise KeyError(f"'Allocations_{year}' missing after calculate_allowance_allocation.")
-
-            # Determine market price and perform trading
-            total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-            total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-            self.determine_market_price(total_supply, total_demand)
-
-            # Calculate abatement costs and trade allowances
+            
+            # Debug: Print allowance surplus/deficit
+            print(f"Allowance Surplus/Deficit for {year}:")
+            print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
+            
             self.calculate_abatement_costs(year)
+            self.determine_market_price(
+                self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum(),
+                abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+            )
+            
+            # Debug: Print market price
+            print(f"Market Price for {year}: {self.market_price}")
+            
             self.trade_allowances(year)
-
-            # Add cost and profit calculations
+            
+            # Debug: Print trade volumes
+            print(f"Trade Volume for {year}:")
+            print(self.facilities_data[[f'Trade Volume_{year}']])
+    
             self.facilities_data[f'Total Cost_{year}'] = (
                 self.facilities_data[f'Abatement Cost_{year}'] +
                 self.facilities_data[f'Trade Cost_{year}'] +
@@ -211,8 +204,7 @@ class obamodel:
             self.facilities_data[f'Costs to Output Ratio_{year}'] = (
                 self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
             )
-
-            # Save yearly results
+    
             facility_output_file = f"facility_summary_{year}.csv"
             yearly_facility_data = self.facilities_data[[
                 'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
@@ -222,12 +214,12 @@ class obamodel:
             ]]
             yearly_facility_data.to_csv(facility_output_file, index=False)
             print(f"Facility-level summary saved to {facility_output_file}")
-
+    
             summary = self.summarize_market_supply_and_demand(year)
             market_output_file = f"market_summary_{year}.csv"
             pd.DataFrame([summary]).to_csv(market_output_file, index=False)
             print(f"Market-level summary saved to {market_output_file}")
-
+    
             yearly_results.append(summary)
-
+    
         return yearly_results
