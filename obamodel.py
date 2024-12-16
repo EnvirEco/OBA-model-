@@ -1,7 +1,7 @@
 import pandas as pd
 
 class obamodel:
-    def __init__(self, facilities_data, abatement_cost_curve, price_ceiling):
+    def __init__(self, facilities_data, abatement_cost_curve, price_ceiling, start_year):
         """
         Initialize the emissions trading model.
 
