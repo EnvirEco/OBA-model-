@@ -44,16 +44,11 @@ class obamodel:
 
 
     def calculate_allowance_allocation(self, year):
-        self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}']
-        )
-        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
-            self.facilities_data[f'Allocations_{year}'] - self.facilities_data[f'Emissions_{year}']
-        )
-    
-        # Debug: Check allocation values
-        print(f"Allocations and Surplus/Deficit for {year}:")
-        print(self.facilities_data[[f'Allocations_{year}', f'Allowance Surplus/Deficit_{year}']].describe())
+        allocation_data = {
+            f'Allocations_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'],
+            f'Allowance Surplus/Deficit_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'] - self.facilities_data[f'Emissions_{year}']
+        }
+        self.facilities_data = pd.concat([self.facilities_data, pd.DataFrame(allocation_data)], axis=1).copy()
 
     def determine_market_price(self, supply, demand):
         """
