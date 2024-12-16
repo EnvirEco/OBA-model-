@@ -57,6 +57,9 @@ class obamodel:
             if col not in self.facilities_data.columns:
                 raise KeyError(f"Missing required column for dynamic calculation: {col}")
     
+        # Fill NaN values with zero before performing calculations
+        self.facilities_data.fillna(0, inplace=True)
+    
         # Perform dynamic allowance allocation calculation
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}']
