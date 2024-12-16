@@ -115,47 +115,49 @@ class obamodel:
         print(f"Year {year} - Post-Abatement Surplus/Deficit:")
         print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
 
-
     def trade_allowances(self, year):
         """
         Simulate trading of allowances between facilities for the specified year.
         """
         self.facilities_data[f'Trade Cost_{year}'] = 0.0
         self.facilities_data[f'Trade Volume_{year}'] = 0.0
-    
+
         buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
         sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
-    
-        print(f"Year {year} - Buyers: {buyers.shape[0]}, Sellers: {sellers.shape[0]}")
+
         if buyers.empty or sellers.empty:
-            print(f"Year {year}: No trades executed due to lack of buyers or sellers.")
+            print(f"Year {year}: No buyers or sellers available for trading.")
             return
-    
+
         for buyer_idx, buyer_row in buyers.iterrows():
             deficit = abs(buyer_row[f'Allowance Surplus/Deficit_{year}'])
+
             for seller_idx, seller_row in sellers.iterrows():
                 surplus = seller_row[f'Allowance Surplus/Deficit_{year}']
+
                 if deficit <= 0 or surplus <= 0:
                     continue
-    
+
                 trade_volume = min(deficit, surplus)
                 trade_cost = trade_volume * self.market_price
-    
+
                 self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
                 self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
                 self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
-    
+
                 self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] -= trade_volume
                 self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
                 self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
-    
+
                 deficit -= trade_volume
                 surplus -= trade_volume
-    
+
+                # Debug prints to verify trade
                 print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
-    
-                if deficit <= 0:
-                    break
+                print(f"Updated Buyer {buyer_idx} - Remaining Deficit: {deficit}")
+                print(f"Updated Seller {seller_idx} - Remaining Surplus: {surplus}")
+
+# Ensure to call the trade_allowances method in the run_model method
            
     def calculate_dynamic_allowance_surplus_deficit(self, year):
         """
