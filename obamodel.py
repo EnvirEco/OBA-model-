@@ -42,15 +42,8 @@ class obamodel:
         print(f"Dynamic values for {year}:")
         print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
 
-    def calculate_allowance_allocation(self, year):
-        """
-        Calculate tradable output-based allocations for each facility for a specific year.
-        """
-        required_columns = [f'Output_{year}', f'Benchmark_{year}', f'Emissions_{year}']
-        for col in required_columns:
-            if col not in self.facilities_data.columns:
-                raise KeyError(f"Missing required column for allocation calculation: {col}")
-    
+
+   def calculate_allowance_allocation(self, year):
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}']
         )
@@ -58,10 +51,9 @@ class obamodel:
             self.facilities_data[f'Allocations_{year}'] - self.facilities_data[f'Emissions_{year}']
         )
     
-        # Debug: Confirm allocations and surplus/deficit
-        print(f"Year {year}: Allocation and Surplus/Deficit Details:")
-        print(self.facilities_data[[f'Allocations_{year}', f'Emissions_{year}', f'Allowance Surplus/Deficit_{year}']].head())
-
+        # Debug: Check allocation values
+        print(f"Allocations and Surplus/Deficit for {year}:")
+        print(self.facilities_data[[f'Allocations_{year}', f'Allowance Surplus/Deficit_{year}']].describe())
 
     def determine_market_price(self, supply, demand):
         """
@@ -79,9 +71,6 @@ class obamodel:
         print(f"Year: Market Price: {self.market_price}, Supply: {supply}, Demand: {demand}")
 
     def calculate_abatement_costs(self, year):
-        """
-        Calculate abatement costs for each facility based on the abatement cost curve.
-        """
         self.facilities_data[f'Abatement Cost_{year}'] = 0.0
     
         for index, row in self.facilities_data.iterrows():
@@ -93,32 +82,25 @@ class obamodel:
     
                 surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
                 if surplus_deficit < 0:
-                    abatement = min(abs(surplus_deficit) * 0.8, max_reduction)  # Apply partial abatement
+                    abatement = min(abs(surplus_deficit), max_reduction)
                     cost = slope * abatement + intercept
                     self.facilities_data.at[index, f'Abatement Cost_{year}'] = cost
                     self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
     
-        # Debug: Confirm abatement costs
-        print(f"Year {year}: Abatement Costs...")
-        print(self.facilities_data[[f'Abatement Cost_{year}', f'Allowance Surplus/Deficit_{year}']].head())
-
+        # Debug: Check abatement impact
+        print(f"Year {year}: Post-Abatement Surplus/Deficit:")
+        print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
 
     def trade_allowances(self, year):
-        """
-        Simulate trading of allowances between facilities for the specified year.
-        """
         self.facilities_data[f'Trade Cost_{year}'] = 0.0
         self.facilities_data[f'Trade Volume_{year}'] = 0.0
     
         buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
         sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
     
-        # Debug: Buyers and sellers check
-        print(f"Year {year}: Buyers Count: {buyers.shape[0]}, Sellers Count: {sellers.shape[0]}")
-        if buyers.empty:
-            print(f"Year {year}: No buyers detected. Check surplus/deficit calculations.")
-        if sellers.empty:
-            print(f"Year {year}: No sellers detected. Check surplus/deficit calculations.")
+        print(f"Year {year}: Buyers Count: {len(buyers)}, Sellers Count: {len(sellers)}")
+        if buyers.empty or sellers.empty:
+            print(f"Year {year}: No trades executed due to lack of buyers or sellers.")
             return
     
         for buyer_idx, buyer_row in buyers.iterrows():
@@ -144,7 +126,6 @@ class obamodel:
                 surplus -= trade_volume
     
                 print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
-    
                 if deficit <= 0:
                     break
 
