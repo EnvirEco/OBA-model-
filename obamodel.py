@@ -9,6 +9,7 @@ class obamodel:
         facilities_data (pd.DataFrame): Facility-level data with emissions, output, etc.
         abatement_cost_curve (pd.DataFrame): Abatement cost data per facility.
         price_ceiling (float): Maximum allowable price for allowances ($/MTCO2e).
+        start_year (int): The starting year of the simulation.
         """
         self.facilities_data = facilities_data
         self.abatement_cost_curve = abatement_cost_curve
