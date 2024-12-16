@@ -91,34 +91,48 @@ class obamodel:
                     cost = slope * abatement + intercept
                     self.facilities_data.at[index, f'Abatement Cost_{year}'] = cost
 
-    def trade_allowances(self, year):
+      def trade_allowances(self, year):
         """
         Simulate trading of allowances between facilities for the specified year.
         """
         self.facilities_data[f'Trade Cost_{year}'] = 0.0
         self.facilities_data[f'Trade Volume_{year}'] = 0.0
-
+    
         buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
         sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
-
+    
+        print(f"Year {year} - Buyers: {len(buyers)}, Sellers: {len(sellers)}")
+        print(f"Market Price: {self.market_price}")
+    
         for buyer_idx, buyer_row in buyers.iterrows():
             deficit = abs(buyer_row[f'Allowance Surplus/Deficit_{year}'])
+            print(f"Buyer {buyer_idx} - Initial Deficit: {deficit}")
+    
             for seller_idx, seller_row in sellers.iterrows():
                 surplus = seller_row[f'Allowance Surplus/Deficit_{year}']
+                print(f"Seller {seller_idx} - Initial Surplus: {surplus}")
+    
                 if deficit <= 0 or surplus <= 0:
                     continue
-
+    
                 trade_volume = min(deficit, surplus)
                 trade_cost = trade_volume * self.market_price
-
+    
                 self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
                 self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
                 self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
-
+    
                 self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] -= trade_volume
                 self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
                 self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
-
+    
+                deficit -= trade_volume
+                surplus -= trade_volume
+    
+                print(f"Trade Volume: {trade_volume}, Trade Cost: {trade_cost}")
+                print(f"Updated Buyer {buyer_idx} - Remaining Deficit: {deficit}")
+                print(f"Updated Seller {seller_idx} - Remaining Surplus: {surplus}")
+            
     def summarize_market_supply_and_demand(self, year):
         """
         Summarize total market supply, demand, and net demand for the year.
