@@ -178,7 +178,28 @@ class obamodel:
         print(f"Dynamic Allowance Surplus/Deficit calculated for {year}:")
         print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
 
-    def run_model(self, start_year, end_year):
+    # Existing methods...
+
+    def summarize_market_supply_and_demand(self, year):
+        """
+        Summarize the market supply and demand for the specified year.
+
+        Parameters:
+        year (int): The current year of the simulation.
+
+        Returns:
+        dict: Summary of market supply and demand.
+        """
+        supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
+        demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+        return {
+            'Year': year,
+            'Supply': supply,
+            'Demand': demand,
+            'Market Price': self.market_price
+        }
+        
+        def run_model(self, start_year, end_year):
         yearly_results = []
     
         for year in range(start_year, end_year + 1):
