@@ -71,13 +71,26 @@ class obamodel:
         """
         Set the market price for allowances based on supply and demand.
         """
+        # Debug: Supply and demand inputs
+        print(f"Calculating market price...")
+        print(f"Total Supply: {supply}, Total Demand: {demand}")
+        
         if demand <= 0:
             self.market_price = 0
+            print("No demand. Market price set to $0.")
         elif supply == 0:
             self.market_price = self.price_ceiling
+            print(f"No supply. Market price set to price ceiling: ${self.price_ceiling}.")
         else:
             supply_demand_ratio = supply / demand
             self.market_price = min(self.price_ceiling, max(10, 100 * (1 / supply_demand_ratio)))
+            print(f"Supply-Demand Ratio: {supply_demand_ratio}, Market Price: {self.market_price}")
+        
+        # Ensure the calculated market price is positive
+        if self.market_price < 0:
+            raise ValueError(f"Market price calculated as negative: {self.market_price}")
+        
+        print(f"Final Market Price: {self.market_price}")
 
     def calculate_abatement_costs(self, year):
         """
@@ -117,23 +130,29 @@ class obamodel:
         buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
         sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
     
-        print(f"Year {year} - Buyers: {len(buyers)}, Sellers: {len(sellers)}")
+        # Debug: Print buyers and sellers
+        print(f"Year {year}: Buyers: {buyers.shape[0]}, Sellers: {sellers.shape[0]}")
         print(f"Market Price: {self.market_price}")
+        print("Initial Buyers' Deficits:")
+        print(buyers[[f'Allowance Surplus/Deficit_{year}']])
+        print("Initial Sellers' Surpluses:")
+        print(sellers[[f'Allowance Surplus/Deficit_{year}']])
+    
+        if buyers.empty or sellers.empty:
+            print(f"Year {year}: No trades executed due to lack of buyers or sellers.")
+            return
     
         for buyer_idx, buyer_row in buyers.iterrows():
             deficit = abs(buyer_row[f'Allowance Surplus/Deficit_{year}'])
-            print(f"Buyer {buyer_idx} - Initial Deficit: {deficit}")
-    
             for seller_idx, seller_row in sellers.iterrows():
                 surplus = seller_row[f'Allowance Surplus/Deficit_{year}']
-                print(f"Seller {seller_idx} - Initial Surplus: {surplus}")
-    
                 if deficit <= 0 or surplus <= 0:
                     continue
     
                 trade_volume = min(deficit, surplus)
                 trade_cost = trade_volume * self.market_price
     
+                # Update buyer and seller allowance balances
                 self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
                 self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
                 self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
@@ -142,12 +161,17 @@ class obamodel:
                 self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
                 self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
     
+                # Adjust remaining deficit and surplus
                 deficit -= trade_volume
                 surplus -= trade_volume
     
-                print(f"Trade Volume: {trade_volume}, Trade Cost: {trade_cost}")
+                print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
                 print(f"Updated Buyer {buyer_idx} - Remaining Deficit: {deficit}")
                 print(f"Updated Seller {seller_idx} - Remaining Surplus: {surplus}")
+    
+                if deficit <= 0:
+                    break
+
             
     def calculate_dynamic_allowance_surplus_deficit(self, year):
         """
