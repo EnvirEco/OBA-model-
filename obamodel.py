@@ -18,6 +18,11 @@ class obamodel:
         self.government_revenue = 0.0
         self.facilities_data['Ceiling Price Payment'] = 0.0
         self.facilities_data['Tonnes Paid at Ceiling'] = 0.0
+        
+        # Check if 'Tonnes Paid at Ceiling' column exists, if not, create it
+        if 'Tonnes Paid at Ceiling' not in self.facilities_data.columns:
+            self.facilities_data['Tonnes Paid at Ceiling'] = 0.0
+        
         self.facilities_data['Allowance Price ($/MTCO2e)'] = 0.0
         self.facilities_data['Trade Volume'] = 0.0  # Initialize trade volume for safety
 
