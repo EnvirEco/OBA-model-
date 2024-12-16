@@ -26,7 +26,7 @@ class obamodel:
         self.facilities_data['Allowance Price ($/MTCO2e)'] = 0.0
         self.facilities_data['Trade Volume'] = 0.0  # Initialize trade volume for safety
 
-   def calculate_dynamic_values(self, year, start_year):
+    def calculate_dynamic_values(self, year, start_year):
         years_since_start = year - start_year
         self.facilities_data[f'Output_{year}'] = (
             self.facilities_data['Baseline Output'] * (1 + self.facilities_data['Output Growth Rate']) ** years_since_start
