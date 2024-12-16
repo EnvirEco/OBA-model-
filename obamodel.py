@@ -30,40 +30,16 @@ class obamodel:
         Set the market price for allowances based on supply and demand.
         """
         print(f"Market Price Calculation: Supply = {supply}, Demand = {demand}")
-
+    
         if demand <= 0:
             self.market_price = 0
         elif supply == 0:
-            self.market_price = float('inf')  # No supply, set price to a very high value
+            self.market_price = float('nan')  # Set to NaN instead of infinity
         else:
             supply_demand_ratio = supply / demand
             self.market_price = max(10, 100 * (1 / supply_demand_ratio))
-
-        print(f"Determined Market Price: {self.market_price}")
-        
-    def calculate_dynamic_values(self, year, start_year):
-        years_since_start = year - start_year
-        self.facilities_data[f'Output_{year}'] = (
-            self.facilities_data['Baseline Output'] * (1 + self.facilities_data['Output Growth Rate']) ** years_since_start
-        )
-        self.facilities_data[f'Emissions_{year}'] = (
-            self.facilities_data['Baseline Emissions'] * (1 + self.facilities_data['Emissions Growth Rate']) ** years_since_start
-        )
-        self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] * (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_since_start
-        )
     
-        # Debug: Check dynamic values
-        print(f"Dynamic values for {year}:")
-        print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
-
-
-    def calculate_allowance_allocation(self, year):
-        allocation_data = {
-            f'Allocations_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'],
-            f'Allowance Surplus/Deficit_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'] - self.facilities_data[f'Emissions_{year}']
-        }
-        self.facilities_data = pd.concat([self.facilities_data, pd.DataFrame(allocation_data)], axis=1).copy()
+        print(f"Determined Market Price: {self.market_price}")
 
     def trade_allowances(self, year):
         self.facilities_data[f'Trade Cost_{year}'] = 0.0
@@ -75,6 +51,10 @@ class obamodel:
         print(f"Year {year}: Buyers Count: {len(buyers)}, Sellers Count: {len(sellers)}")
         if buyers.empty or sellers.empty:
             print(f"Year {year}: No trades executed due to lack of buyers or sellers.")
+            return
+    
+        if pd.isna(self.market_price):
+            print(f"Year {year}: No trades executed due to undefined market price.")
             return
     
         for buyer_idx, buyer_row in buyers.iterrows():
@@ -102,6 +82,30 @@ class obamodel:
                 print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
                 if deficit <= 0:
                     break
+        
+    def calculate_dynamic_values(self, year, start_year):
+        years_since_start = year - start_year
+        self.facilities_data[f'Output_{year}'] = (
+            self.facilities_data['Baseline Output'] * (1 + self.facilities_data['Output Growth Rate']) ** years_since_start
+        )
+        self.facilities_data[f'Emissions_{year}'] = (
+            self.facilities_data['Baseline Emissions'] * (1 + self.facilities_data['Emissions Growth Rate']) ** years_since_start
+        )
+        self.facilities_data[f'Benchmark_{year}'] = (
+            self.facilities_data['Baseline Benchmark'] * (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_since_start
+        )
+    
+        # Debug: Check dynamic values
+        print(f"Dynamic values for {year}:")
+        print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
+
+
+    def calculate_allowance_allocation(self, year):
+        allocation_data = {
+            f'Allocations_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'],
+            f'Allowance Surplus/Deficit_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'] - self.facilities_data[f'Emissions_{year}']
+        }
+        self.facilities_data = pd.concat([self.facilities_data, pd.DataFrame(allocation_data)], axis=1).copy()
 
     def calculate_abatement_costs(self, year):
         """
