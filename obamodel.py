@@ -97,14 +97,15 @@ class obamodel:
     
                 surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
                 if surplus_deficit < 0:
-                    abatement = min(abs(surplus_deficit), max_reduction)
+                    abatement = min(abs(surplus_deficit) * 0.8, max_reduction)  # Apply partial abatement
                     cost = slope * abatement + intercept
                     self.facilities_data.at[index, f'Abatement Cost_{year}'] = cost
                     self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
     
-        # Debug: Check abatement effectiveness
-        print(f"Year {year} - Post-Abatement Surplus/Deficit:")
-        print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
+        # Debug: Confirm abatement costs
+        print(f"Year {year}: Abatement Costs...")
+        print(self.facilities_data[[f'Abatement Cost_{year}', f'Allowance Surplus/Deficit_{year}']].head())
+
 
     def trade_allowances(self, year):
         """
