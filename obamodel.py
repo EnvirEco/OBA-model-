@@ -14,7 +14,7 @@ class obamodel:
         self.facilities_data = facilities_data
         self.abatement_cost_curve = abatement_cost_curve
         self.price_ceiling = price_ceiling
-        self.market_price = None
+        self.start_year = start_year  # Store the start_yearself.market_price = None
         self.government_revenue = 0.0
         self.facilities_data['Ceiling Price Payment'] = 0.0
         self.facilities_data['Tonnes Paid at Ceiling'] = 0.0
