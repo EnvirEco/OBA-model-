@@ -292,4 +292,4 @@ class obamodel:
             except KeyError as e:
                 print(f"KeyError during model run for year {year}: {e}")
     
-        return yearly results
+        return yearly_results
