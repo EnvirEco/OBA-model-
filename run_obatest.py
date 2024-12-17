@@ -52,7 +52,7 @@ def run_trading_model(start_year=2025, end_year=2035):
             f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
             f'Trade Cost_{year}', f'Total Cost_{year}', f'Profit_{year}',
             f'Costs to Profits Ratio_{year}', f'Costs to Output Ratio_{year}',
-            'Banked Allowances'  # Add Banked Allowances to the summary
+            'Banked Allowances', f'Emission Reductions_{year}'  # Add Emission Reductions to the summary
         ]].copy()
 
         facility_summary["Year"] = year
