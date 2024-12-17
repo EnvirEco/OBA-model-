@@ -83,7 +83,7 @@ class obamodel:
         # Debug: Confirm dynamic allowance surplus/deficit calculation
         print(f"Dynamic Allowance Surplus/Deficit calculated for {year}:")
         print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
-
+    
     def trade_allowances(self, year):
         self.facilities_data[f'Trade Cost_{year}'] = 0.0
         self.facilities_data[f'Trade Volume_{year}'] = 0.0
@@ -202,7 +202,7 @@ class obamodel:
         # Debug: Validate supply, demand, and net demand
         print(f"Year {year}: Total Supply: {total_supply}, Total Demand: {total_demand}, Net Demand: {net_demand}, Banked Allowances: {total_banked_allowances}")
         print(f"Year {year}: Total Allocations: {total_allocations}, Total Emissions: {total_emissions}, Total Output: {total_output}")
-
+    
         # Return the summary dictionary
         summary = {
             'Year': year,
