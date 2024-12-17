@@ -28,6 +28,7 @@ class obamodel:
         # Initialize banked allowances and vintage year
         self.facilities_data['Banked Allowances'] = 0.0
         self.facilities_data['Vintage Year'] = self.start_year
+        self.banking_efficiency_rate = 0.8  # Banking efficiency rate of 80%
 
     def determine_market_price(self, supply, demand):
         """
@@ -174,7 +175,7 @@ class obamodel:
         print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
 
     def bank_allowances(self, year):
-        self.facilities_data['Banked Allowances'] += self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0)
+        self.facilities_data['Banked Allowances'] += self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0) * self.banking_efficiency_rate
 
     def update_vintages(self, year):
         self.facilities_data['Vintage Year'] = year
@@ -291,4 +292,4 @@ class obamodel:
             except KeyError as e:
                 print(f"KeyError during model run for year {year}: {e}")
     
-        return yearly_results
+        return yearly results
