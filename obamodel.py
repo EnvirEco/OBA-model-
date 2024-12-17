@@ -202,7 +202,7 @@ class obamodel:
         # Debug: Validate supply, demand, and net demand
         print(f"Year {year}: Total Supply: {total_supply}, Total Demand: {total_demand}, Net Demand: {net_demand}, Banked Allowances: {total_banked_allowances}")
         print(f"Year {year}: Total Allocations: {total_allocations}, Total Emissions: {total_emissions}, Total Output: {total_output}")
-    
+
         # Return the summary dictionary
         summary = {
             'Year': year,
