@@ -218,23 +218,38 @@ class obamodel:
             'Allowance Price ($/MTCO2e)': self.market_price
         }
         return summary
+        
+    def calculate_emission_reductions(self, year):
+        """
+        Calculate and report emission reductions for each facility based on baseline emissions.
+        """
+        self.facilities_data[f'Emission Reductions_{year}'] = (
+            self.facilities_data['Baseline Emissions'] - self.facilities_data[f'Emissions_{year}']
+        )
+        
+        # Debug: Validate emission reductions
+        print(f"Year {year}: Emission Reductions from Baseline:")
+        print(self.facilities_data[f'Emission Reductions_{year}'].describe())
 
     def run_model(self, start_year, end_year):
         yearly_results = []
-    
+
         for year in range(start_year, end_year + 1):
             print(f"Running model for year {year}...")
-    
+
             try:
                 # Ensure dynamic values are calculated first
                 self.calculate_dynamic_values(year, self.start_year)
-    
+
+                # Calculate and report emission reductions
+                self.calculate_emission_reductions(year)
+
                 # Verify the calculated columns exist
                 required_columns = [f'Output_{year}', f'Benchmark_{year}', f'Emissions_{year}']
                 for col in required_columns:
                     if col not in self.facilities_data.columns:
                         raise KeyError(f"Missing required column: {col}")
-    
+
                 # Calculate allocations and surplus/deficit
                 self.calculate_allowance_allocation(year)
                 
@@ -256,7 +271,7 @@ class obamodel:
                 # Debug: Print trade volumes
                 print(f"Trade Volume for {year}:")
                 print(self.facilities_data[[f'Trade Volume_{year}']])
-    
+
                 self.facilities_data[f'Total Cost_{year}'] = (
                     self.facilities_data[f'Abatement Cost_{year}'] +
                     self.facilities_data[f'Trade Cost_{year}'] +
@@ -271,25 +286,28 @@ class obamodel:
                 self.facilities_data[f'Costs to Output Ratio_{year}'] = (
                     self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
                 )
-    
+
                 facility_output_file = f"facility_summary_{year}.csv"
                 yearly_facility_data = self.facilities_data[[
                     'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
                     f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
                     f'Total Cost_{year}', f'Profit_{year}', f'Costs to Profits Ratio_{year}',
-                    f'Costs to Output Ratio_{year}', 'Banked Allowances'
+                    f'Costs to Output Ratio_{year}', 'Banked Allowances',
+                    f'Emission Reductions_{year}'  # Add emission reductions to the summary
                 ]]
                 yearly_facility_data.to_csv(facility_output_file, index=False)
                 print(f"Facility-level summary saved to {facility_output_file}")
-    
+
                 summary = self.summarize_market_supply_and_demand(year)
                 market_output_file = f"market_summary_{year}.csv"
                 pd.DataFrame([summary]).to_csv(market_output_file, index=False)
                 print(f"Market-level summary saved to {market_output_file}")
-    
+
                 yearly_results.append(summary)
             
             except KeyError as e:
                 print(f"KeyError during model run for year {year}: {e}")
-    
+
         return yearly_results
+
+    # ... existing code ...
