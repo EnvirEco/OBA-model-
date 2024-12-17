@@ -180,18 +180,7 @@ class obamodel:
         self.facilities_data['Vintage Year'] = year
 
     def summarize_market_supply_and_demand(self, year):
-        """
-        Summarize total market supply, demand, and net demand for the year.
-        """
-        # Debug: Check surplus/deficit distribution
-        print(f"Year {year}: Surplus/Deficit distribution:")
-        print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
-        
-        # Calculate supply and demand
-        total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-        total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-        net_demand = total_demand - total_supply
-        total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum()
+        # Existing code...
         total_banked_allowances = self.facilities_data['Banked Allowances'].sum()
         
         # Debug: Validate supply, demand, and net demand
