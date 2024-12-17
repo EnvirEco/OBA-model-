@@ -180,7 +180,7 @@ class obamodel:
     def update_vintages(self, year):
         self.facilities_data['Vintage Year'] = year
 
-def summarize_market_supply_and_demand(self, year):
+    def summarize_market_supply_and_demand(self, year):
         """
         Summarize total market supply, demand, net demand, and other metrics for the year.
         """
@@ -219,7 +219,7 @@ def summarize_market_supply_and_demand(self, year):
         }
         return summary
 
-   def run_model(self, start_year, end_year):
+    def run_model(self, start_year, end_year):
         yearly_results = []
     
         for year in range(start_year, end_year + 1):
