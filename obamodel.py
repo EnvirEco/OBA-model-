@@ -25,6 +25,10 @@ class obamodel:
         self.facilities_data['Allowance Price ($/MTCO2e)'] = 0.0
         self.facilities_data['Trade Volume'] = 0.0  # Initialize trade volume for safety
 
+        # Initialize banked allowances and vintage year
+        self.facilities_data['Banked Allowances'] = 0.0
+        self.facilities_data['Vintage Year'] = self.start_year
+
     def determine_market_price(self, supply, demand):
         """
         Set the market price for allowances based on supply and demand.
@@ -73,6 +77,9 @@ class obamodel:
         if total_supply == 0:
             self.facilities_data[f'Allowance Surplus/Deficit_{year}'] += 1  # Adjust to avoid zero supply
     
+        # Bank surplus allowances
+        self.bank_allowances(year)
+        
         # Debug: Confirm dynamic allowance surplus/deficit calculation
         print(f"Dynamic Allowance Surplus/Deficit calculated for {year}:")
         print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
@@ -135,7 +142,6 @@ class obamodel:
         print(f"Dynamic values for {year}:")
         print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
 
-
     def calculate_allowance_allocation(self, year):
         allocation_data = {
             f'Allocations_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'],
@@ -167,11 +173,11 @@ class obamodel:
         print(f"Year {year}: Post-Abatement Surplus/Deficit:")
         print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
 
+    def bank_allowances(self, year):
+        self.facilities_data['Banked Allowances'] += self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0)
 
-      # Ensure to call the trade_allowances method in the run_model method
-           
-    
-    # Existing methods...
+    def update_vintages(self, year):
+        self.facilities_data['Vintage Year'] = year
 
     def summarize_market_supply_and_demand(self, year):
         """
@@ -186,9 +192,10 @@ class obamodel:
         total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
         net_demand = total_demand - total_supply
         total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum()
+        total_banked_allowances = self.facilities_data['Banked Allowances'].sum()
         
         # Debug: Validate supply, demand, and net demand
-        print(f"Year {year}: Total Supply: {total_supply}, Total Demand: {total_demand}, Net Demand: {net_demand}")
+        print(f"Year {year}: Total Supply: {total_supply}, Total Demand: {total_demand}, Net Demand: {net_demand}, Banked Allowances: {total_banked_allowances}")
     
         # Return the summary dictionary
         summary = {
@@ -197,11 +204,11 @@ class obamodel:
             'Total Demand (MTCO2e)': total_demand,
             'Net Demand (MTCO2e)': net_demand,
             'Total Trade Volume (MTCO2e)': total_trade_volume,
+            'Banked Allowances (MTCO2e)': total_banked_allowances,
             'Allowance Price ($/MTCO2e)': self.market_price
         }
         return summary
 
-        
     def run_model(self, start_year, end_year):
         yearly_results = []
     
@@ -260,7 +267,7 @@ class obamodel:
                     'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
                     f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
                     f'Total Cost_{year}', f'Profit_{year}', f'Costs to Profits Ratio_{year}',
-                    f'Costs to Output Ratio_{year}'
+                    f'Costs to Output Ratio_{year}', 'Banked Allowances'
                 ]]
                 yearly_facility_data.to_csv(facility_output_file, index=False)
                 print(f"Facility-level summary saved to {facility_output_file}")
