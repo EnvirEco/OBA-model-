@@ -41,43 +41,36 @@ class obamodel:
         
             print(f"Determined Market Price: {self.market_price}")
 
-    def calculate_dynamic_allowance_surplus_deficit(self, year):
-        """
-        Dynamically calculate Allowance Surplus/Deficit for each facility for the specified year.
-        This method ensures that the calculation is updated dynamically to reflect changes over the years.
-        """
-        # Calculate dynamic values for Output, Emissions, and Benchmark
-        self.calculate_dynamic_values(year, self.start_year)
+    def execute_trades(self, year):
+        buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
+        sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
+    
+        total_trade_volume = 0
+    
+        for _, buyer in buyers.iterrows():
+            for _, seller in sellers.iterrows():
+                if buyer[f'Allowance Surplus/Deficit_{year}'] >= 0 or seller[f'Allowance Surplus/Deficit_{year}'] <= 0:
+                    continue
+    
+                trade_volume = min(abs(buyer[f'Allowance Surplus/Deficit_{year}']), seller[f'Allowance Surplus/Deficit_{year}'])
+                trade_cost = trade_volume * self.market_price
+    
+                buyer[f'Allowance Surplus/Deficit_{year}'] += trade_volume
+                seller[f'Allowance Surplus/Deficit_{year}'] -= trade_volume
+    
+                buyer[f'Trade Volume_{year}'] += trade_volume
+                seller[f'Trade Volume_{year}'] -= trade_volume
+    
+                buyer[f'Trade Cost_{year}'] += trade_cost
+                seller[f'Trade Cost_{year}'] -= trade_cost
+    
+                total_trade_volume += trade_volume
+    
+                if buyer[f'Allowance Surplus/Deficit_{year}'] >= 0:
+                    break
+    
+        print(f"Total trade volume for year {year}: {total_trade_volume}")
         
-        # Verify required columns
-        required_columns = [f'Output_{year}', f'Benchmark_{year}', f'Emissions_{year}']
-        for col in required_columns:
-            if col not in self.facilities_data.columns:
-                raise KeyError(f"Missing required column for dynamic calculation: {col}")
-    
-        # Fill NaN values with zero before performing calculations
-        self.facilities_data.fillna(0, inplace=True)
-    
-        # Perform dynamic allowance allocation calculation
-        self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}']
-        )
-        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
-            self.facilities_data[f'Allocations_{year}'] - self.facilities_data[f'Emissions_{year}']
-        )
-    
-        # Ensure that the total supply is not zero
-        total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-        if total_supply == 0:
-            self.facilities_data[f'Allowance Surplus/Deficit_{year}'] += 1  # Adjust to avoid zero supply
-    
-        # Bank surplus allowances
-        self.bank_allowances(year)
-        
-        # Debug: Confirm dynamic allowance surplus/deficit calculation
-        print(f"Dynamic Allowance Surplus/Deficit calculated for {year}:")
-        print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
-    
     def calculate_dynamic_values(self, year, start_year):
         years_since_start = year - start_year
         self.facilities_data[f'Output_{year}'] = (
@@ -251,69 +244,20 @@ class obamodel:
             print(f"Running model for year {year}...")
     
             try:
-                # Ensure dynamic values are calculated first
                 self.calculate_dynamic_values(year, self.start_year)
-    
-                # Verify the calculated columns exist
-                required_columns = [f'Output_{year}', f'Benchmark_{year}', f'Emissions_{year}']
-                for col in required_columns:
-                    if col not in self.facilities_data.columns:
-                        raise KeyError(f"Missing required column: {col}")
-    
-                # Calculate allocations and surplus/deficit
                 self.calculate_allowance_allocation(year)
-                
-                # Debug: Print allowance surplus/deficit
-                print(f"Allowance Surplus/Deficit for {year}:")
-                print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
-                
                 self.calculate_abatement_costs(year)
+    
                 self.determine_market_price(
                     self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum(),
                     abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
                 )
-                
-                # Debug: Print market price
-                print(f"Market Price for {year}: {self.market_price}")
-                
-                self.trade_allowances(year)
-                
-                # Debug: Print trade volumes
-                print(f"Trade Volume for {year}:")
-                print(self.facilities_data[[f'Trade Volume_{year}']])
     
-                self.facilities_data[f'Total Cost_{year}'] = (
-                    self.facilities_data[f'Abatement Cost_{year}'] +
-                    self.facilities_data[f'Trade Cost_{year}'] +
-                    self.facilities_data['Ceiling Price Payment']
-                )
-                self.facilities_data[f'Profit_{year}'] = (
-                    self.facilities_data[f'Output_{year}'] * self.facilities_data['Baseline Profit Rate']
-                )
-                self.facilities_data[f'Costs to Profits Ratio_{year}'] = (
-                    self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Profit_{year}']
-                )
-                self.facilities_data[f'Costs to Output Ratio_{year}'] = (
-                    self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
-                )
-    
-                facility_output_file = f"facility_summary_{year}.csv"
-                yearly_facility_data = self.facilities_data[[
-                    'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
-                    f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
-                    f'Total Cost_{year}', f'Profit_{year}', f'Costs to Profits Ratio_{year}',
-                    f'Costs to Output Ratio_{year}', 'Banked Allowances'
-                ]]
-                yearly_facility_data.to_csv(facility_output_file, index=False)
-                print(f"Facility-level summary saved to {facility_output_file}")
+                self.execute_trades(year)
     
                 summary = self.summarize_market_supply_and_demand(year)
-                market_output_file = f"market_summary_{year}.csv"
-                pd.DataFrame([summary]).to_csv(market_output_file, index=False)
-                print(f"Market-level summary saved to {market_output_file}")
-    
                 yearly_results.append(summary)
-            
+    
             except KeyError as e:
                 print(f"KeyError during model run for year {year}: {e}")
     
