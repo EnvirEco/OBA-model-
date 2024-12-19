@@ -30,22 +30,16 @@ class obamodel:
         self.facilities_data['Vintage Year'] = self.start_year
 
     def determine_market_price(self, supply, demand):
-        """
-        Set the market price for allowances based on supply and demand.
-        """
-        print(f"Market Price Calculation: Supply = {supply}, Demand = {demand}")
-    
         if demand <= 0:
             self.market_price = 0
         elif supply == 0:
-            # Set a default minimal supply value to avoid zero supply
-            supply = 1
-            self.market_price = max(10, 100 * (1 / supply))
+            supply = 1  # Avoid zero supply
+            self.market_price = max(10, 100 / supply)
         else:
             supply_demand_ratio = supply / demand
-            self.market_price = max(10, 100 * (1 / supply_demand_ratio))
-    
-        print(f"Determined Market Price: {self.market_price}")
+            self.market_price = max(10, 100 / supply_demand_ratio)
+        
+            print(f"Determined Market Price: {self.market_price}")
 
     def calculate_dynamic_allowance_surplus_deficit(self, year):
         """
@@ -84,48 +78,6 @@ class obamodel:
         print(f"Dynamic Allowance Surplus/Deficit calculated for {year}:")
         print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
     
-    def trade_allowances(self, year):
-        self.facilities_data[f'Trade Cost_{year}'] = 0.0
-        self.facilities_data[f'Trade Volume_{year}'] = 0.0
-    
-        buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
-        sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
-    
-        print(f"Year {year}: Buyers Count: {len(buyers)}, Sellers Count: {len(sellers)}")
-        if buyers.empty or sellers.empty:
-            print(f"Year {year}: No trades executed due to lack of buyers or sellers.")
-            return
-    
-        if pd.isna(self.market_price):
-            print(f"Year {year}: No trades executed due to undefined market price.")
-            return
-    
-        for buyer_idx, buyer_row in buyers.iterrows():
-            deficit = abs(buyer_row[f'Allowance Surplus/Deficit_{year}'])
-            for seller_idx, seller_row in sellers.iterrows():
-                surplus = seller_row[f'Allowance Surplus/Deficit_{year}']
-                if deficit <= 0 or surplus <= 0:
-                    continue
-    
-                trade_volume = min(deficit, surplus)
-                trade_cost = trade_volume * self.market_price
-    
-                # Update buyer and seller balances
-                self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
-                self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
-                self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
-    
-                self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] -= trade_volume
-                self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
-                self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
-    
-                deficit -= trade_volume
-                surplus -= trade_volume
-    
-                print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
-                if deficit <= 0:
-                    break
-        
     def calculate_dynamic_values(self, year, start_year):
         years_since_start = year - start_year
         self.facilities_data[f'Output_{year}'] = (
@@ -142,12 +94,67 @@ class obamodel:
         print(f"Dynamic values for {year}:")
         print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
 
-    def calculate_allowance_allocation(self, year):
-        allocation_data = {
-            f'Allocations_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'],
-            f'Allowance Surplus/Deficit_{year}': self.facilities_data[f'Output_{year}'] * self.facilities_data[f'Benchmark_{year}'] - self.facilities_data[f'Emissions_{year}']
-        }
-        self.facilities_data = pd.concat([self.facilities_data, pd.DataFrame(allocation_data)], axis=1).copy()
+    def calculate_allowance_allocation(self):
+        self.facilities_data['Allocations'] = (
+            self.facilities_data['Output'] * self.facilities_data['Benchmark']
+        ).fillna(0)
+    
+        self.facilities_data['Allowance Surplus/Deficit'] = (
+            self.facilities_data['Allocations'] - self.facilities_data['Emissions']
+        ).fillna(0)
+    
+        # Ensure surplus values are valid
+        total_supply = self.facilities_data['Allowance Surplus/Deficit'].clip(lower=0).sum()
+        if total_supply == 0:
+            print("Warning: No surplus allowances available. Adjusting for minimal supply.")
+            self.facilities_data['Allowance Surplus/Deficit'] += 0.1  # Add a minimal value to enable trading
+    
+        # Debugging allocations
+        print("Debug: Allowance Allocation and Surplus/Deficit:")
+        print(self.facilities_data[['Facility ID', 'Allocations', 'Allowance Surplus/Deficit']])
+
+    def trade_allowances(self):
+        self.facilities_data['Trade Cost'] = 0.0
+        self.facilities_data['Trade Volume'] = 0.0
+    
+        buyers = self.facilities_data[self.facilities_data['Allowance Surplus/Deficit'] < 0]
+        sellers = self.facilities_data[self.facilities_data['Allowance Surplus/Deficit'] > 0]
+    
+        print(f"Debug: Buyers Count = {len(buyers)}, Sellers Count = {len(sellers)}")
+        print("Debug: Buyers:")
+        print(buyers[['Facility ID', 'Allowance Surplus/Deficit']])
+        print("Debug: Sellers:")
+        print(sellers[['Facility ID', 'Allowance Surplus/Deficit']])
+    
+        if buyers.empty or sellers.empty:
+            print("No trades executed due to lack of buyers or sellers.")
+            return
+    
+        for _, buyer_row in buyers.iterrows():
+            deficit = abs(buyer_row['Allowance Surplus/Deficit'])
+            for _, seller_row in sellers.iterrows():
+                surplus = seller_row['Allowance Surplus/Deficit']
+                if deficit <= 0 or surplus <= 0:
+                    continue
+    
+                trade_volume = min(deficit, surplus)
+                trade_cost = trade_volume * self.market_price
+    
+                # Update buyer and seller balances
+                self.facilities_data.loc[buyer_row.name, 'Allowance Surplus/Deficit'] += trade_volume
+                self.facilities_data.loc[buyer_row.name, 'Trade Cost'] += trade_cost
+                self.facilities_data.loc[buyer_row.name, 'Trade Volume'] += trade_volume
+    
+                self.facilities_data.loc[seller_row.name, 'Allowance Surplus/Deficit'] -= trade_volume
+                self.facilities_data.loc[seller_row.name, 'Trade Cost'] -= trade_cost
+                self.facilities_data.loc[seller_row.name, 'Trade Volume'] -= trade_volume
+    
+                deficit -= trade_volume
+                print(f"Trade executed: Buyer {buyer_row['Facility ID']}, Seller {seller_row['Facility ID']}, Volume: {trade_volume}, Cost: {trade_cost}")
+    
+        # Debugging after trading
+        print("Debug: Facility Data After Trading:")
+        print(self.facilities_data[['Facility ID', 'Allowance Surplus/Deficit', 'Trade Cost', 'Trade Volume']])
 
     def calculate_abatement_costs(self, year):
         """
@@ -179,29 +186,48 @@ class obamodel:
     def update_vintages(self, year):
         self.facilities_data['Vintage Year'] = year
 
-    def summarize_market_supply_and_demand(self, year):
-        """
-        Summarize total market supply, demand, net demand, and other metrics for the year.
-        """
-        # Debug: Check surplus/deficit distribution
-        print(f"Year {year}: Surplus/Deficit distribution:")
-        print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
+    def market_clearing(self, year):
+        max_iterations = 100
+        tolerance = 1e-3
+        iteration = 0
         
-        # Calculate supply and demand
-        total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-        total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-        net_demand = total_demand - total_supply
-        total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum()
-        total_banked_allowances = self.facilities_data['Banked Allowances'].sum()
-        
-        # Calculate total allocations, emissions, and output
-        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
-        total_output = self.facilities_data[f'Output_{year}'].sum()
-        
-        # Debug: Validate supply, demand, and net demand
-        print(f"Year {year}: Total Supply: {total_supply}, Total Demand: {total_demand}, Net Demand: {net_demand}, Banked Allowances: {total_banked_allowances}")
-        print(f"Year {year}: Total Allocations: {total_allocations}, Total Emissions: {total_emissions}, Total Output: {total_output}")
+        while iteration < max_iterations:
+            self.determine_market_price(
+                self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum(),
+                abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+            )
+            
+            self.trade_allowances(year)
+            
+            total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
+            total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+            
+            if abs(total_supply - total_demand) < tolerance:
+                break
+            iteration += 1
+        print(f"Market cleared after {iteration} iterations with price: {self.market_price}") def summarize_market_supply_and_demand(self, year):
+            """
+            Summarize total market supply, demand, net demand, and other metrics for the year.
+            """
+            # Debug: Check surplus/deficit distribution
+            print(f"Year {year}: Surplus/Deficit distribution:")
+            print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
+            
+            # Calculate supply and demand
+            total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
+            total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+            net_demand = total_demand - total_supply
+            total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum()
+            total_banked_allowances = self.facilities_data['Banked Allowances'].sum()
+            
+            # Calculate total allocations, emissions, and output
+            total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+            total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+            total_output = self.facilities_data[f'Output_{year}'].sum()
+            
+            # Debug: Validate supply, demand, and net demand
+            print(f"Year {year}: Total Supply: {total_supply}, Total Demand: {total_demand}, Net Demand: {net_demand}, Banked Allowances: {total_banked_allowances}")
+            print(f"Year {year}: Total Allocations: {total_allocations}, Total Emissions: {total_emissions}, Total Output: {total_output}")
     
         # Return the summary dictionary
         summary = {
