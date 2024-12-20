@@ -7,22 +7,24 @@ class OBAModel:
         self.start_year = start_year
         self.market_price = 0.0
         self.government_revenue = 0.0
-        self.facilities_data['Ceiling Price Payment'] = 0.0
-        self.facilities_data['Tonnes Paid at Ceiling'] = 0.0
+        
+        self._initialize_columns()
 
-        if 'Tonnes Paid at Ceiling' not in self.facilities_data.columns:
-            self.facilities_data['Tonnes Paid at Ceiling'] = 0.0
-
-        self.facilities_data['Allowance Price ($/MTCO2e)'] = 0.0
-        self.facilities_data['Trade Volume'] = 0.0
-        self.facilities_data['Banked Allowances'] = 0.0
+    def _initialize_columns(self):
+        necessary_columns = [
+            'Ceiling Price Payment', 'Tonnes Paid at Ceiling', 'Allowance Price ($/MTCO2e)',
+            'Trade Volume', 'Banked Allowances', 'Vintage Year'
+        ]
+        for column in necessary_columns:
+            if column not in self.facilities_data.columns:
+                self.facilities_data[column] = 0.0
         self.facilities_data['Vintage Year'] = self.start_year
 
     def determine_market_price(self, supply, demand):
         if demand <= 0:
             self.market_price = 0
         elif supply == 0:
-            supply = 1
+            supply = 1  # Avoid division by zero
             self.market_price = (100 / supply)
         else:
             supply_demand_ratio = supply / demand
@@ -42,14 +44,13 @@ class OBAModel:
                 trade_volume = min(abs(buyer[f'Allowance Surplus/Deficit_{year}']), seller[f'Allowance Surplus/Deficit_{year}'])
                 trade_cost = trade_volume * self.market_price
 
-                buyer[f'Allowance Surplus/Deficit_{year}'] += trade_volume
-                seller[f'Allowance Surplus/Deficit_{year}'] -= trade_volume
+                self.facilities_data.loc[buyer.name, f'Allowance Surplus/Deficit_{year}'] += trade_volume
+                self.facilities_data.loc[buyer.name, f'Trade Cost_{year}'] += trade_cost
+                self.facilities_data.loc[buyer.name, f'Trade Volume_{year}'] += trade_volume
 
-                buyer[f'Trade Volume_{year}'] += trade_volume
-                seller[f'Trade Volume_{year}'] -= trade_volume
-
-                buyer[f'Trade Cost_{year}'] += trade_cost
-                seller[f'Trade Cost_{year}'] -= trade_cost
+                self.facilities_data.loc[seller.name, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
+                self.facilities_data.loc[seller.name, f'Trade Cost_{year}'] -= trade_cost
+                self.facilities_data.loc[seller.name, f'Trade Volume_{year}'] -= trade_volume
 
                 total_trade_volume += trade_volume
 
@@ -102,8 +103,14 @@ class OBAModel:
         print(f"Year {year}: Post-Abatement Surplus/Deficit:")
         print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
 
+    def calculate_remaining_surplus(self, year):
+        self.facilities_data[f'Remaining Surplus_{year}'] = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0)
+        print(f"Year {year}: Remaining Surplus:")
+        print(self.facilities_data[['Facility ID', f'Remaining Surplus_{year}']])
+
     def bank_allowances(self, year):
-        self.facilities_data['Banked Allowances'] += self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0)
+        self.calculate_remaining_surplus(year)
+        self.facilities_data['Banked Allowances'] += self.facilities_data[f'Remaining Surplus_{year}']
         print(f"Year {year}: Banked Allowances:")
         print(self.facilities_data[['Facility ID', 'Banked Allowances']])
 
