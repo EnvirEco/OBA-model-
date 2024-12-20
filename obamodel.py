@@ -23,10 +23,10 @@ class OBAModel:
             self.market_price = 0
         elif supply == 0:
             supply = 1
-            self.market_price = max(10, 100 / supply)
+            self.market_price = (100 / supply)
         else:
             supply_demand_ratio = supply / demand
-            self.market_price = max(10, 100 / supply_demand_ratio)
+            self.market_price = (100 / supply_demand_ratio)
         print(f"Determined Market Price: {self.market_price}")
 
     def execute_trades(self, year):
