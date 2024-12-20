@@ -109,10 +109,18 @@ class OBAModel:
         print(self.facilities_data[['Facility ID', f'Remaining Surplus_{year}']])
 
     def bank_allowances(self, year):
-        self.calculate_remaining_surplus(year)
-        self.facilities_data['Banked Allowances'] += self.facilities_data[f'Remaining Surplus_{year}']
-        print(f"Year {year}: Banked Allowances:")
-        print(self.facilities_data[['Facility ID', 'Banked Allowances']])
+        # Initialize a year-specific column for banking if not already present
+        column_name = f'Banked Allowances_{year}'
+        if column_name not in self.facilities_data.columns:
+            self.facilities_data[column_name] = 0.0
+    
+        # Update the year-specific banked allowances based on the surplus for that year
+        self.facilities_data[column_name] += self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0)
+    
+        # Optionally, log banking for debugging
+        print(f"Year {year}: Updated Banked Allowances:")
+        print(self.facilities_data[['Facility ID', column_name]])
+
 
     def update_vintages(self, year):
         self.facilities_data['Vintage Year'] = year
@@ -174,7 +182,7 @@ class OBAModel:
                     abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
                 )
                 self.execute_trades(year)
-                self.bank_allowances(year)
+                self.bank_allowances(year)  # Use year-specific banking
                 summary = self.summarize_market_supply_and_demand(year)
                 yearly_results.append(summary)
             except KeyError as e:
