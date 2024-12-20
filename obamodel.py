@@ -114,13 +114,24 @@ class OBAModel:
         if column_name not in self.facilities_data.columns:
             self.facilities_data[column_name] = 0.0
     
+        # Debug: Print initial values
+        print(f"Initial Banked Allowances for year {year}:")
+        print(self.facilities_data[['Facility ID', column_name, f'Allowance Surplus/Deficit_{year}']])
+    
         # Update the year-specific banked allowances based on the surplus for that year
         self.facilities_data[column_name] += self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0)
     
-        # Optionally, log banking for debugging
-        print(f"Year {year}: Updated Banked Allowances:")
+        # Debug: Print updated values
+        print(f"Updated Banked Allowances for year {year}:")
         print(self.facilities_data[['Facility ID', column_name]])
-
+    
+        # Apply banking cap
+        banking_cap = 0.8 * self.facilities_data[f'Allocations_{year}']
+        self.facilities_data[column_name] = self.facilities_data[column_name].clip(upper=banking_cap)
+    
+        # Debug: Print capped values
+        print(f"Capped Banked Allowances for year {year}:")
+        print(self.facilities_data[['Facility ID', column_name]])
 
     def update_vintages(self, year):
         self.facilities_data['Vintage Year'] = year
@@ -149,7 +160,7 @@ class OBAModel:
         total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
         net_demand = total_demand - total_supply
         total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum()
-        total_banked_allowances = self.facilities_data['Banked Allowances'].sum()
+        total_banked_allowances = self.facilities_data[f'Banked Allowances_{year}'].sum()
         total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         total_output = self.facilities_data[f'Output_{year}'].sum()
