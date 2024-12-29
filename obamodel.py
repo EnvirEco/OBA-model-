@@ -218,77 +218,102 @@ class obamodel:
         }
         return summary
 
-    def run_model(self, start_year, end_year):
-        yearly_results = []
-    
-        for year in range(start_year, end_year + 1):
-            print(f"Running model for year {year}...")
-    
-            try:
-                # Ensure dynamic values are calculated first
-                self.calculate_dynamic_values(year, self.start_year)
-    
-                # Verify the calculated columns exist
-                required_columns = [f'Output_{year}', f'Benchmark_{year}', f'Emissions_{year}']
-                for col in required_columns:
-                    if col not in self.facilities_data.columns:
-                        raise KeyError(f"Missing required column: {col}")
-    
-                # Calculate allocations and surplus/deficit
-                self.calculate_allowance_allocation(year)
-                
-                # Debug: Print allowance surplus/deficit
-                print(f"Allowance Surplus/Deficit for {year}:")
-                print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
-                
-                self.calculate_abatement_costs(year)
-                self.determine_market_price(
-                    self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum(),
-                    abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-                )
-                
-                # Debug: Print market price
-                print(f"Market Price for {year}: {self.market_price}")
-                
-                self.trade_allowances(year)
-                
-                # Debug: Print trade volumes
-                print(f"Trade Volume for {year}:")
-                print(self.facilities_data[[f'Trade Volume_{year}']])
-    
-                self.facilities_data[f'Total Cost_{year}'] = (
-                    self.facilities_data[f'Abatement Cost_{year}'] +
-                    self.facilities_data[f'Trade Cost_{year}'] +
-                    self.facilities_data['Ceiling Price Payment']
-                )
-                self.facilities_data[f'Profit_{year}'] = (
-                    self.facilities_data[f'Output_{year}'] * self.facilities_data['Baseline Profit Rate']
-                )
-                self.facilities_data[f'Costs to Profits Ratio_{year}'] = (
-                    self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Profit_{year}']
-                )
-                self.facilities_data[f'Costs to Output Ratio_{year}'] = (
-                    self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
-                )
-    
-                facility_output_file = f"facility_summary_{year}.csv"
-                yearly_facility_data = self.facilities_data[[
-                    'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
-                    f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
-                    f'Total Cost_{year}', f'Profit_{year}', f'Costs to Profits Ratio_{year}',
-                    f'Costs to Output Ratio_{year}', 'Banked Allowances'
-                ]]
-                yearly_facility_data.to_csv(facility_output_file, index=False)
-                print(f"Facility-level summary saved to {facility_output_file}")
-    
-                summary = self.summarize_market_supply_and_demand(year)
-                market_output_file = f"market_summary_{year}.csv"
-                pd.DataFrame([summary]).to_csv(market_output_file, index=False)
-                print(f"Market-level summary saved to {market_output_file}")
-    
-                yearly_results.append(summary)
-            
-            except KeyError as e:
-                print(f"KeyError during model run for year {year}: {e}")
-    
-        return yearly_results
+       def run_model(self, start_year, end_year):
+            yearly_results = []
+            combined_summary = {
+                'Total Supply (MTCO2e)': 0,
+                'Total Demand (MTCO2e)': 0,
+                'Net Demand (MTCO2e)': 0,
+                'Total Trade Volume (MTCO2e)': 0,
+                'Banked Allowances (MTCO2e)': 0,
+                'Total Allocations (MTCO2e)': 0,
+                'Total Emissions (MTCO2e)': 0,
+                'Total Output (MTCO2e)': 0
+            }
+        
+            for year in range(start_year, end_year + 1):
+                print(f"Running model for year {year}...")
+        
+                try:
+                    # Ensure dynamic values are calculated first
+                    self.calculate_dynamic_values(year, self.start_year)
+        
+                    # Verify the calculated columns exist
+                    required_columns = [f'Output_{year}', f'Benchmark_{year}', f'Emissions_{year}']
+                    for col in required_columns:
+                        if col not in self.facilities_data.columns:
+                            raise KeyError(f"Missing required column: {col}")
+        
+                    # Calculate allocations and surplus/deficit
+                    self.calculate_allowance_allocation(year)
+                    
+                    # Debug: Print allowance surplus/deficit
+                    print(f"Allowance Surplus/Deficit for {year}:")
+                    print(self.facilities_data[[f'Allowance Surplus/Deficit_{year}']])
+                    
+                    self.calculate_abatement_costs(year)
+                    self.determine_market_price(
+                        self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum(),
+                        abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+                    )
+                    
+                    # Debug: Print market price
+                    print(f"Market Price for {year}: {self.market_price}")
+                    
+                    self.trade_allowances(year)
+                    
+                    # Debug: Print trade volumes
+                    print(f"Trade Volume for {year}:")
+                    print(self.facilities_data[[f'Trade Volume_{year}']])
+        
+                    self.facilities_data[f'Total Cost_{year}'] = (
+                        self.facilities_data[f'Abatement Cost_{year}'] +
+                        self.facilities_data[f'Trade Cost_{year}'] +
+                        self.facilities_data['Ceiling Price Payment']
+                    )
+                    self.facilities_data[f'Profit_{year}'] = (
+                        self.facilities_data[f'Output_{year}'] * self.facilities_data['Baseline Profit Rate']
+                    )
+                    self.facilities_data[f'Costs to Profits Ratio_{year}'] = (
+                        self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Profit_{year}']
+                    )
+                    self.facilities_data[f'Costs to Output Ratio_{year}'] = (
+                        self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
+                    )
+        
+                    facility_output_file = f"facility_summary_{year}.csv"
+                    yearly_facility_data = self.facilities_data[[
+                        'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
+                        f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
+                        f'Total Cost_{year}', f'Profit_{year}', f'Costs to Profits Ratio_{year}',
+                        f'Costs to Output Ratio_{year}', 'Banked Allowances'
+                    ]]
+                    yearly_facility_data.to_csv(facility_output_file, index=False)
+                    print(f"Facility-level summary saved to {facility_output_file}")
+        
+                    summary = self.summarize_market_supply_and_demand(year)
+                    market_output_file = f"market_summary_{year}.csv"
+                    pd.DataFrame([summary]).to_csv(market_output_file, index=False)
+                    print(f"Market-level summary saved to {market_output_file}")
+        
+                    yearly_results.append(summary)
+        
+                    # Update combined summary
+                    combined_summary['Total Supply (MTCO2e)'] += summary['Total Supply (MTCO2e)']
+                    combined_summary['Total Demand (MTCO2e)'] += summary['Total Demand (MTCO2e)']
+                    combined_summary['Net Demand (MTCO2e)'] += summary['Net Demand (MTCO2e)']
+                    combined_summary['Total Trade Volume (MTCO2e)'] += summary['Total Trade Volume (MTCO2e)']
+                    combined_summary['Banked Allowances (MTCO2e)'] += summary['Banked Allowances (MTCO2e)']
+                    combined_summary['Total Allocations (MTCO2e)'] += summary['Total Allocations (MTCO2e)']
+                    combined_summary['Total Emissions (MTCO2e)'] += summary['Total Emissions (MTCO2e)']
+                    combined_summary['Total Output (MTCO2e)'] += summary['Total Output (MTCO2e)']
+        
+                except KeyError as e:
+                    print(f"KeyError during model run for year {year}: {e}")
+        
+            # Save combined summary
+            combined_output_file = "combined_market_summary.csv"
+            pd.DataFrame([combined_summary]).to_csv(combined_output_file, index=False)
+            print(f"Combined market summary saved to {combined_output_file}")
+        
+            return yearly_results
