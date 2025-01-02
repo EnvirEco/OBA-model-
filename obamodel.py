@@ -1,6 +1,6 @@
 import pandas as pd
 
-class OBAModel:
+class obamodel:
     def __init__(self, facilities_data, abatement_cost_curve, start_year):
         self.facilities_data = facilities_data
         self.abatement_cost_curve = abatement_cost_curve
