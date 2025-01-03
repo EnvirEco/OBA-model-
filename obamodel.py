@@ -62,31 +62,35 @@ class obamodel:
         print(f"Year {year} Debug: Total Supply = {total_supply}, Total Demand = {total_demand}")
 
     def calculate_abatement(self, year):
-        print(f"Calculating abatement for year {year}...")
-        for index, row in self.facilities_data.iterrows():
-            deficit = -row[f'Allowance Surplus/Deficit_{year}']  # Negative means deficit
-            if deficit > 0:
-                # Find abatement cost curve for the facility
-                abatement_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
-                if not abatement_curve.empty:
-                    slope = abatement_curve.iloc[0]['Slope']
-                    intercept = abatement_curve.iloc[0]['Intercept']
-                    max_reduction = abatement_curve.iloc[0]['Max Reduction (MTCO2e)']
-
-                    # Calculate abatement based on the deficit
-                    abatement = min(deficit, max_reduction)
-                    abatement_cost = slope * abatement + intercept
-
-                    # Compare abatement cost with market price
-                    purchase_cost = deficit * self.market_price
-                    if abatement_cost < purchase_cost:
-                        # Abate emissions
-                        self.facilities_data.at[index, f'Abatement Cost_{year}'] = abatement_cost
-                        self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
-                        print(f"Facility {row['Facility ID']} abated {abatement} MTCO2e at cost {abatement_cost}")
-                    else:
-                        print(f"Facility {row['Facility ID']} opts to purchase allowances at market price.")
-
+            print(f"Calculating abatement for year {year}...")
+            for index, row in self.facilities_data.iterrows():
+                deficit = -row[f'Allowance Surplus/Deficit_{year}']  # Negative means deficit
+                if deficit > 0:
+                    # Find abatement cost curve for the facility
+                    abatement_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
+                    if not abatement_curve.empty:
+                        slope = abatement_curve.iloc[0]['Slope']
+                        intercept = abatement_curve.iloc[0]['Intercept']
+                        max_reduction = abatement_curve.iloc[0]['Max Reduction (MTCO2e)']
+        
+                        # Calculate abatement based on the deficit
+                        abatement = min(deficit, max_reduction)
+                        abatement_cost = slope * abatement + intercept
+        
+                        # Ensure abatement cost is not negative
+                        if abatement_cost < 0:
+                            abatement_cost = 0
+        
+                        # Compare abatement cost with market price
+                        purchase_cost = deficit * self.market_price
+                        if abatement_cost < purchase_cost:
+                            # Abate emissions
+                            self.facilities_data.at[index, f'Abatement Cost_{year}'] = abatement_cost
+                            self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
+                            print(f"Facility {row['Facility ID']} abated {abatement} MTCO2e at cost {abatement_cost}")
+                        else:
+                            print(f"Facility {row['Facility ID']} opts to purchase allowances at market price.")
+    
     def trade_allowances(self, year):
         print(f"Trading allowances for year {year}...")
         buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
