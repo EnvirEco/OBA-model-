@@ -61,31 +61,6 @@ class obamodel:
         total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
         print(f"Year {year} Debug: Total Supply = {total_supply}, Total Demand = {total_demand}")
 
-        # Calculate abatement costs for facilities with deficits
-        for index, row in self.facilities_data.iterrows():
-            deficit = -row[f'Allowance Surplus/Deficit_{year}']  # Negative means deficit
-            if deficit > 0:
-                # Find abatement cost curve for the facility
-                abatement_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
-                if not abatement_curve.empty:
-                    slope = abatement_curve.iloc[0]['Slope']
-                    intercept = abatement_curve.iloc[0]['Intercept']
-                    max_reduction = abatement_curve.iloc[0]['Max Reduction (MTCO2e)']
-
-                    # Calculate abatement based on the deficit
-                    abatement = min(deficit, max_reduction)
-                    abatement_cost = slope * abatement + intercept
-
-                    # Compare abatement cost with market price
-                    purchase_cost = deficit * self.market_price
-                    if abatement_cost < purchase_cost:
-                        # Abate emissions
-                        self.facilities_data.at[index, f'Abatement Cost_{year}'] = abatement_cost
-                        self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
-                        print(f"Facility {row['Facility ID']} abated {abatement} MTCO2e at cost {abatement_cost}")
-                    else:
-                        print(f"Facility {row['Facility ID']} opts to purchase allowances at market price.")
-
     def trade_allowances(self, year):
         print(f"Trading allowances for year {year}...")
         buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
@@ -149,29 +124,34 @@ class obamodel:
 
     def determine_market_price(self, supply, demand):
         print(f"Determining market price: Supply={supply}, Demand={demand}")
-        if demand <= 0:
-            print("Warning: Demand is zero or negative, setting market price to 0.")
-            self.market_price = 0
+        if demand > 0 and supply > 0:
+            self.market_price = max(0, 100 * (1 / (supply / demand)))
         elif supply == 0:
-            print("Warning: Supply is zero, using default high market price.")
-            self.market_price = max(10, 100)
+            self.market_price = 200  # High price due to lack of supply
         else:
-            supply_demand_ratio = supply / demand
-            self.market_price = max(10, 100 * (1 / supply_demand_ratio))
+            self.market_price = 0  # No demand or negative demand
         print(f"Market price set to: {self.market_price}")
+
+    def run_model(self, start_year, end_year):
+        print("Running emissions trading model...")
+        for year in range(start_year, end_year + 1):
+            print(f"\nProcessing year {year}...")
+            self.calculate_dynamic_allowance_surplus_deficit(year)
+            self.trade_allowances(year)
+            print(f"Year {year} complete.")
+        print("Model run complete.")
 
     def save_reshaped_facility_summary(self, start_year, end_year, output_file):
         reshaped_data = []
-
         for year in range(start_year, end_year + 1):
-            required_columns = [
-                f"Emissions_{year}", f"Benchmark_{year}", f"Allocations_{year}",
-                f"Allowance Surplus/Deficit_{year}", f"Abatement Cost_{year}",
-                f"Trade Cost_{year}", f"Total Cost_{year}", f"Trade Volume_{year}",
+            year_data = self.facilities_data[[
+                "Facility ID", f"Emissions_{year}", f"Benchmark_{year}",
+                f"Allocations_{year}", f"Allowance Surplus/Deficit_{year}",
+                f"Abatement Cost_{year}", f"Trade Cost_{year}",
+                f"Total Cost_{year}", f"Trade Volume_{year}",
                 f"Allowance Price_{year}"
-            ]
-            year_data = self.facilities_data[required_columns + ["Facility ID"]].copy()
-            year_data = year_data.rename(columns={
+            ]].copy()
+            year_data.rename(columns={
                 f"Emissions_{year}": "Emissions",
                 f"Benchmark_{year}": "Benchmark",
                 f"Allocations_{year}": "Allocations",
@@ -181,10 +161,10 @@ class obamodel:
                 f"Total Cost_{year}": "Total Cost",
                 f"Trade Volume_{year}": "Trade Volume",
                 f"Allowance Price_{year}": "Allowance Price"
-            })
+            }, inplace=True)
             year_data["Year"] = year
-            reshaped_data.append(pd.melt(
-                year_data, id_vars=["Facility ID", "Year"],
+            reshaped_data.append(year_data.melt(
+                id_vars=["Facility ID", "Year"],
                 var_name="Variable Name", value_name="Value"
             ))
 
@@ -192,12 +172,3 @@ class obamodel:
         reshaped_combined_data.to_csv(output_file, index=False)
         print(f"Reshaped facility summary saved to {output_file}")
 
-    def run_model(self, start_year, end_year):
-        print("Running emissions trading model...")
-        for year in range(start_year, end_year + 1):
-            print(f"\nProcessing year {year}...")
-            self.calculate_dynamic_allowance_surplus_deficit(year)
-            self.trade_allowances(year)
-            print(f"Credit Carryover after year {year}:")
-            print(self.facilities_data['Credit Carryover'].describe())
-        print("Model run complete.")
