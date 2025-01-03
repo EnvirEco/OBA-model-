@@ -35,11 +35,12 @@ def run_trading_model(start_year=2025, end_year=2035):
             print(f"Error: {reshaped_output_file} not found!")
 
         # Save annual market summary
-        market_summary_file = "annual_market_summary.csv"
+        market_summary_file = "market_summary.csv"
         market_summaries = []
-        annual_facility_summaries = []  # New: Collect annual facility-level data
+        annual_facility_summaries = []  # Collect annual facility-level data
 
         for year in range(start_year, end_year + 1):
+            print(f"Processing year {year}...")
             total_trade_volume = model.facilities_data[f'Trade Volume_{year}'].sum()
             total_trade_cost = model.facilities_data[f'Trade Cost_{year}'].sum()
             total_allocations = model.facilities_data[f'Allocations_{year}'].sum()
@@ -52,7 +53,10 @@ def run_trading_model(start_year=2025, end_year=2035):
             total_demand = abs(model.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
             net_demand = total_demand - total_supply
             total_output = model.facilities_data[f'Output_{year}'].sum()
-            allowance_price = model.market_price
+            allowance_price = model.facilities_data[f'Allowance Price_{year}'].mean()
+
+            # Prevent allowance price from defaulting to 10 when prices crash
+            allowance_price = allowance_price if allowance_price > 0 else 0
 
             summary = {
                 "Year": year,
@@ -95,11 +99,15 @@ def run_trading_model(start_year=2025, end_year=2035):
 
         pd.DataFrame(market_summaries).to_csv(market_summary_file, index=False)
         print(f"Annual market summary saved to {market_summary_file}")
+        print("Market Summary Debug:")
+        print(pd.DataFrame(market_summaries).head())
 
         # Save combined annual facility summary
         facility_summary_file = "annual_facility_summary.csv"
         pd.concat(annual_facility_summaries).to_csv(facility_summary_file, index=False)
         print(f"Annual facility summary saved to {facility_summary_file}")
+        print("Facility Summary Debug:")
+        print(pd.concat(annual_facility_summaries).head())
 
     except Exception as e:
         print(f"Error during model run: {e}")
