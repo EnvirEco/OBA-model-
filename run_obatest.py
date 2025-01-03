@@ -14,21 +14,6 @@ abatement_cost_curve = pd.read_csv("abatement_cost_curve.csv")
 start_year = 2025
 model = obamodel(facilities_data, abatement_cost_curve, start_year)
 
-# Dynamically calculate annual values
-
-def calculate_annual_values(facilities_data, year, start_year):
-    years_since_start = year - start_year
-    facilities_data[f'Output_{year}'] = (
-        facilities_data['Baseline Output'] * (1 + facilities_data['Output Growth Rate']) ** years_since_start
-    )
-    facilities_data[f'Emissions_{year}'] = (
-        facilities_data['Baseline Emissions'] * (1 + facilities_data['Emissions Growth Rate']) ** years_since_start
-    )
-    facilities_data[f'Benchmark_{year}'] = (
-        facilities_data['Baseline Benchmark'] * (1 + facilities_data['Benchmark Ratchet Rate']) ** years_since_start
-    )
-    return facilities_data
-
 # Run the emissions trading model
 def run_trading_model(start_year=2025, end_year=2035):
     print("Running the model...")
@@ -52,6 +37,8 @@ def run_trading_model(start_year=2025, end_year=2035):
         # Save annual market summary
         market_summary_file = "annual_market_summary.csv"
         market_summaries = []
+        annual_facility_summaries = []  # New: Collect annual facility-level data
+
         for year in range(start_year, end_year + 1):
             total_trade_volume = model.facilities_data[f'Trade Volume_{year}'].sum()
             total_trade_cost = model.facilities_data[f'Trade Cost_{year}'].sum()
@@ -60,6 +47,13 @@ def run_trading_model(start_year=2025, end_year=2035):
             total_surplus_deficit = model.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum()
             total_credit_carryover = model.facilities_data['Credit Carryover'].sum()
 
+            # Add additional metrics
+            total_supply = model.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
+            total_demand = abs(model.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+            net_demand = total_demand - total_supply
+            total_output = model.facilities_data[f'Output_{year}'].sum()
+            allowance_price = model.market_price
+
             summary = {
                 "Year": year,
                 "Total Allocations": total_allocations,
@@ -67,16 +61,48 @@ def run_trading_model(start_year=2025, end_year=2035):
                 "Total Surplus/Deficit": total_surplus_deficit,
                 "Total Trade Volume": total_trade_volume,
                 "Total Trade Cost": total_trade_cost,
-                "Total Credit Carryover": total_credit_carryover
+                "Total Credit Carryover": total_credit_carryover,
+                "Total Supply": total_supply,
+                "Total Demand": total_demand,
+                "Net Demand": net_demand,
+                "Total Output": total_output,
+                "Allowance Price ($/MTCO2e)": allowance_price
             }
             market_summaries.append(summary)
+
+            # Facility-level data for the year
+            facility_summary = model.facilities_data[[
+                "Facility ID", f"Allocations_{year}", f"Emissions_{year}",
+                f"Allowance Surplus/Deficit_{year}", f"Trade Volume_{year}",
+                f"Trade Cost_{year}", f"Abatement Cost_{year}", "Credit Carryover"
+            ]].copy()
+            facility_summary["Year"] = year
+            facility_summary = facility_summary.rename(columns={
+                f"Allocations_{year}": "Allocations",
+                f"Emissions_{year}": "Emissions",
+                f"Allowance Surplus/Deficit_{year}": "Allowance Surplus/Deficit",
+                f"Trade Volume_{year}": "Trade Volume",
+                f"Trade Cost_{year}": "Trade Cost",
+                f"Abatement Cost_{year}": "Abatement Cost"
+            })
+
+            # Calculate cost breakdown
+            facility_summary["Compliance Cost"] = facility_summary["Trade Cost"] + facility_summary["Abatement Cost"]
+            facility_summary["Cost to Profit Ratio"] = facility_summary["Compliance Cost"] / facility_summary["Allocations"]
+            facility_summary["Cost to Output Ratio"] = facility_summary["Compliance Cost"] / model.facilities_data[f"Output_{year}"]
+
+            annual_facility_summaries.append(facility_summary)
 
         pd.DataFrame(market_summaries).to_csv(market_summary_file, index=False)
         print(f"Annual market summary saved to {market_summary_file}")
 
+        # Save combined annual facility summary
+        facility_summary_file = "annual_facility_summary.csv"
+        pd.concat(annual_facility_summaries).to_csv(facility_summary_file, index=False)
+        print(f"Annual facility summary saved to {facility_summary_file}")
+
     except Exception as e:
         print(f"Error during model run: {e}")
-
 
 # Execute the function
 if __name__ == "__main__":
