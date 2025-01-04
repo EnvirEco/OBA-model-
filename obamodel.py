@@ -61,107 +61,129 @@ class obamodel:
         total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
         print(f"Year {year} Debug: Total Supply = {total_supply}, Total Demand = {total_demand}")
 
+    def calculate_marginal_costs(self, year):
+        marginal_costs = []
+        for index, row in self.facilities_data.iterrows():
+            deficit = -row[f'Allowance Surplus/Deficit_{year}']
+            if deficit > 0:
+                abatement_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
+                if not abatement_curve.empty:
+                    slope = abatement_curve.iloc[0]['Slope']
+                    marginal_cost = slope  # Assuming linear cost curve (Slope is the marginal cost)
+                    marginal_costs.append((marginal_cost, deficit))
+        return marginal_costs
+
     def calculate_abatement(self, year):
-            print(f"Calculating abatement for year {year}...")
-            for index, row in self.facilities_data.iterrows():
-                deficit = -row[f'Allowance Surplus/Deficit_{year}']  # Negative means deficit
-                if deficit > 0:
-                    # Find abatement cost curve for the facility
-                    abatement_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
-                    if not abatement_curve.empty:
-                        slope = abatement_curve.iloc[0]['Slope']
-                        intercept = abatement_curve.iloc[0]['Intercept']
-                        max_reduction = abatement_curve.iloc[0]['Max Reduction (MTCO2e)']
-        
-                        # Calculate abatement based on the deficit
-                        abatement = min(deficit, max_reduction)
-                        abatement_cost = slope * abatement + intercept
-        
-                        # Ensure abatement cost is not negative
-                        if abatement_cost < 0:
-                            abatement_cost = 0
-        
-                        # Compare abatement cost with market price
-                        purchase_cost = deficit * self.market_price
-                        if abatement_cost < purchase_cost:
-                            # Abate emissions
-                            self.facilities_data.at[index, f'Abatement Cost_{year}'] = abatement_cost
-                            self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
-                            print(f"Facility {row['Facility ID']} abated {abatement} MTCO2e at cost {abatement_cost}")
-                        else:
-                            print(f"Facility {row['Facility ID']} opts to purchase allowances at market price.")
+        print(f"Calculating abatement for year {year}...")
+        for index, row in self.facilities_data.iterrows():
+            deficit = -row[f'Allowance Surplus/Deficit_{year}']  # Negative means deficit
+            if deficit > 0:
+                # Find abatement cost curve for the facility
+                abatement_curve = self.abatement_cost_curve[self.abatement_cost_curve['Facility ID'] == row['Facility ID']]
+                if not abatement_curve.empty:
+                    slope = abatement_curve.iloc[0]['Slope']
+                    intercept = abatement_curve.iloc[0]['Intercept']
+                    max_reduction = abatement_curve.iloc[0]['Max Reduction (MTCO2e)']
+                    
+                    # Calculate abatement based on the deficit
+                    abatement = min(deficit, max_reduction)
+                    abatement_cost = slope * abatement + intercept
+                    
+                    # Ensure abatement cost is not negative
+                    if abatement_cost < 0:
+                        abatement_cost = 0
+                    
+                    # Compare abatement cost with market price
+                    purchase_cost = deficit * self.market_price
+                    if abatement_cost < purchase_cost:
+                        # Abate emissions
+                        self.facilities_data.at[index, f'Abatement Cost_{year}'] = abatement_cost
+                        self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abatement
+                        print(f"Facility {row['Facility ID']} abated {abatement} MTCO2e at cost {abatement_cost}")
+                    else:
+                        print(f"Facility {row['Facility ID']} opts to purchase allowances at market price.")
     
+    def determine_market_price(self, supply, demand, year):
+        print(f"Determining market price: Supply={supply}, Demand={demand}")
+        if demand > 0 and supply > 0:
+            marginal_costs = self.calculate_marginal_costs(year)
+            marginal_costs.sort()
+            accumulated_supply = 0
+            for marginal_cost, deficit in marginal_costs:
+                accumulated_supply += deficit
+                if accumulated_supply >= demand:
+                    self.market_price = marginal_cost
+                    break
+            else:
+                self.market_price = marginal_costs[-1][0] if marginal_costs else 0
+        elif supply == 0:
+            self.market_price = 200  # High price due to lack of supply
+        else:
+            self.market_price = 0  # No demand or negative demand
+        print(f"Market price set to: {self.market_price}")
+    
+      
     def trade_allowances(self, year):
         print(f"Trading allowances for year {year}...")
         buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
         sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
-
+    
         # Calculate total supply and demand
         total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
         total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-
+    
         print(f"Year {year} Debug: Total Supply = {total_supply}, Total Demand = {total_demand}")
-
+    
         if total_demand == 0 and total_supply == 0:
             print(f"Warning: Both supply and demand are zero for year {year}. No trades executed.")
             self.market_price = 0
             return
-
+    
         # Determine market price dynamically
-        self.determine_market_price(total_supply, total_demand)
-
+        self.determine_market_price(total_supply, total_demand, year)
+    
         # Store the market price for the year
         self.facilities_data[f'Allowance Price_{year}'] = self.market_price
-
+    
         if buyers.empty or sellers.empty:
             print(f"No buyers or sellers for year {year}. Skipping trades.")
             return
-
+    
         print(f"Buyers: {len(buyers)}, Sellers: {len(sellers)}")
-
+    
         for buyer_idx, buyer in buyers.iterrows():
             deficit = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
             carryover = self.facilities_data.at[buyer_idx, 'Credit Carryover']
-
+    
             if carryover > 0:
                 applied_credits = min(deficit, carryover)
                 self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += applied_credits
                 self.facilities_data.at[buyer_idx, 'Credit Carryover'] -= applied_credits
                 deficit -= applied_credits
                 print(f"Buyer {buyer_idx} used {applied_credits} credits. Remaining deficit: {deficit}")
-
+    
             if deficit > 0:
                 for seller_idx, seller in sellers.iterrows():
                     surplus = seller[f'Allowance Surplus/Deficit_{year}']
                     if surplus <= 0:
                         continue
-
+    
                     trade_volume = min(deficit, surplus)
                     trade_cost = trade_volume * self.market_price
-
+    
                     self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
                     self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
                     self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
                     self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
                     self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] -= trade_volume
                     self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
-
+    
                     deficit -= trade_volume
                     print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
-
+    
                     if deficit <= 0:
                         break
-
-    def determine_market_price(self, supply, demand):
-        print(f"Determining market price: Supply={supply}, Demand={demand}")
-        if demand > 0 and supply > 0:
-            self.market_price = max(0, 100 * (1 / (supply / demand)))
-        elif supply == 0:
-            self.market_price = 200  # High price due to lack of supply
-        else:
-            self.market_price = 0  # No demand or negative demand
-        print(f"Market price set to: {self.market_price}")
-
+  
     def run_model(self, start_year, end_year):
         print("Running emissions trading model...")
         for year in range(start_year, end_year + 1):
