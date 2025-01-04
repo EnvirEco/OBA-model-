@@ -201,6 +201,7 @@ class obamodel:
             'Allowance Price ($/MTCO2e)': self.market_price
         }
         return summary
+        
     
     def save_reshaped_facility_summary(self, start_year, end_year, output_file):
         reshaped_data = []
