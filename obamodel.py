@@ -84,30 +84,30 @@ class obamodel:
 
 
     def calculate_abatement_costs(self, year):
-        print(f"Calculating abatement costs for year {year}...")
-        for index, facility in self.facilities_data.iterrows():
-            surplus_deficit = facility[f'Allowance Surplus/Deficit_{year}']
-            if surplus_deficit < 0:  # Facility has a deficit
-                facility_curve = self.abatement_cost_curve[
-                    self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                ]
-                if not facility_curve.empty:
-                    slope = float(facility_curve['Slope'].values[0])
-                    intercept = float(facility_curve['Intercept'].values[0])
-                    max_reduction = float(facility_curve['Max Reduction (MTCO2e)'].values[0])
-    
-                    abated = 0
-                    while abs(surplus_deficit) > 0 and abated < max_reduction:
-                        marginal_abatement_cost = slope * abated + intercept
-                        if marginal_abatement_cost > self.market_price:
-                            break
-    
-                        increment = min(abs(surplus_deficit), max_reduction - abated, 1.0)
-                        abated += increment
-                        surplus_deficit += increment
-                        self.facilities_data.at[index, f'Abatement Cost_{year}'] += marginal_abatement_cost * increment
-                    self.facilities_data.at[index, f'Tonnes Abated_{year}'] = abated
-                    self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abated
+      print(f"Calculating abatement costs for year {year}...")
+      for index, facility in self.facilities_data.iterrows():
+          surplus_deficit = facility[f'Allowance Surplus/Deficit_{year}']
+          if surplus_deficit < 0:  # Facility has a deficit
+              facility_curve = self.abatement_cost_curve[
+                  self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+              ]
+              if not facility_curve.empty:
+                  slope = float(facility_curve['Slope'].values[0])
+                  intercept = float(facility_curve['Intercept'].values[0])
+                  max_reduction = float(facility_curve['Max Reduction (MTCO2e)'].values[0])
+  
+                  abated = 0
+                  while abs(surplus_deficit) > 0 and abated < max_reduction:
+                      marginal_abatement_cost = slope * abated + intercept
+                      if marginal_abatement_cost > self.market_price:
+                          break  # Abatement no longer cost-effective
+  
+                      increment = min(abs(surplus_deficit), max_reduction - abated, 1.0)
+                      abated += increment
+                      surplus_deficit += increment
+                      self.facilities_data.at[index, f'Abatement Cost_{year}'] += marginal_abatement_cost * increment
+                  self.facilities_data.at[index, f'Tonnes Abated_{year}'] = abated
+                  self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abated
 
     def trade_allowances(self, year):
         print(f"Trading allowances for year {year}...")
@@ -117,32 +117,32 @@ class obamodel:
         if buyers.empty or sellers.empty:
             print(f"No buyers or sellers for year {year}. Skipping trades.")
             return
-        
+    
         if self.market_price <= 0:
             print(f"Warning: Market price is {self.market_price}. No valid trades executed.")
             return
-        
+    
         for buyer_idx, buyer_row in buyers.iterrows():
             deficit = abs(buyer_row[f'Allowance Surplus/Deficit_{year}'])
             for seller_idx, seller_row in sellers.iterrows():
                 surplus = seller_row[f'Allowance Surplus/Deficit_{year}']
                 if deficit <= 0 or surplus <= 0:
                     continue
-                
+    
                 # Calculate trade volume and cost
                 trade_volume = min(deficit, surplus)
                 trade_cost = trade_volume * self.market_price
-                
+    
                 # Update buyer
                 self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
                 self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
                 self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
-                
+    
                 # Update seller
                 self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] -= trade_volume
                 self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
                 self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
-                
+    
                 deficit -= trade_volume
                 print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
 
@@ -258,3 +258,4 @@ class obamodel:
         reshaped_combined_data = pd.concat(reshaped_data, ignore_index=True)
         reshaped_combined_data.to_csv(output_file, index=False)
         print(f"Reshaped facility summary saved to {output_file}")
+
