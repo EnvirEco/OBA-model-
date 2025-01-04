@@ -173,7 +173,34 @@ class obamodel:
             print(self.facilities_data['Credit Carryover'].describe())
         print("Model run complete.")
 
-    def save_reshaped_facility_summary(self, start_year, end_year, output_file):
+    def summarize_market_supply_and_demand(self, year):
+        print(f"Year {year}: Surplus/Deficit distribution:")
+        print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
+        total_supply = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
+        total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+        net_demand = total_demand - total_supply
+        total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum()
+        total_banked_allowances = self.facilities_data[f'Banked Allowances_{year}'].sum()
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        total_output = self.facilities_data[f'Output_{year}'].sum()
+        
+        print(f"Year {year}: Total Supply: {total_supply}, Total Demand: {total_demand}, Net Demand: {net_demand}, Banked Allowances: {total_banked_allowances}")
+        print(f"Year {year}: Total Allocations: {total_allocations}, Total Emissions: {total_emissions}, Total Output: {total_output}")
+        
+        summary = {
+            'Year': year,
+            'Total Supply (MTCO2e)': total_supply,
+            'Total Demand (MTCO2e)': total_demand,
+            'Net Demand (MTCO2e)': net_demand,
+            'Total Trade Volume (MTCO2e)': total_trade_volume,
+            'Banked Allowances (MTCO2e)': total_banked_allowances,
+            'Total Allocations (MTCO2e)': total_allocations,
+            'Total Emissions (MTCO2e)': total_emissions,
+            'Total Output (MTCO2e)': total_output,
+            'Allowance Price ($/MTCO2e)': self.market_price
+        }
+    return summarydef save_reshaped_facility_summary(self, start_year, end_year, output_file):
         reshaped_data = []
         for year in range(start_year, end_year + 1):
             year_data = self.facilities_data[[
