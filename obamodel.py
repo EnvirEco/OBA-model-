@@ -200,7 +200,9 @@ class obamodel:
             'Total Output (MTCO2e)': total_output,
             'Allowance Price ($/MTCO2e)': self.market_price
         }
-    return summarydef save_reshaped_facility_summary(self, start_year, end_year, output_file):
+        return summary
+    
+    def save_reshaped_facility_summary(self, start_year, end_year, output_file):
         reshaped_data = []
         for year in range(start_year, end_year + 1):
             year_data = self.facilities_data[[
