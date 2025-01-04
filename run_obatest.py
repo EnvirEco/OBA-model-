@@ -22,11 +22,11 @@ def run_trading_model(start_year=2025, end_year=2035):
         # Execute the model
         model.run_model(start_year, end_year)
 
-        # Save reshaped data including trades
+        # Save reshaped data including trades and carryover credits
         reshaped_output_file = "reshaped_combined_summary.csv"
         model.save_reshaped_facility_summary(start_year, end_year, reshaped_output_file)
 
-        # Load and preview reshaped data to verify inclusion of trades
+        # Load and preview reshaped data to verify inclusion of trades and credits
         if os.path.exists(reshaped_output_file):
             reshaped_data = pd.read_csv(reshaped_output_file)
             print("Preview of reshaped combined summary:")
@@ -46,25 +46,17 @@ def run_trading_model(start_year=2025, end_year=2035):
             total_allocations = model.facilities_data[f'Allocations_{year}'].sum()
             total_emissions = model.facilities_data[f'Emissions_{year}'].sum()
             total_surplus_deficit = model.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum()
+            total_credit_carryover = model.facilities_data['Credit Carryover'].sum()
 
             # Add additional metrics
             total_supply = model.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
             total_demand = abs(model.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-
-            # Align supply and demand if discrepancies exist
-            if abs(total_supply - total_demand) < 1e-6:
-                total_supply = total_demand
-
             net_demand = total_demand - total_supply
             total_output = model.facilities_data[f'Output_{year}'].sum()
             allowance_price = model.facilities_data[f'Allowance Price_{year}'].mean()
 
             # Prevent allowance price from defaulting to 10 when prices crash
             allowance_price = allowance_price if allowance_price > 0 else 0
-
-            # Include abatement metrics
-            total_abatement = model.facilities_data[f'Tonnes Abated_{year}'].sum()
-            total_abatement_cost = model.facilities_data[f'Abatement Cost_{year}'].sum()
 
             summary = {
                 "Year": year,
@@ -73,13 +65,12 @@ def run_trading_model(start_year=2025, end_year=2035):
                 "Total Surplus/Deficit": total_surplus_deficit,
                 "Total Trade Volume": total_trade_volume,
                 "Total Trade Cost": total_trade_cost,
+                "Total Credit Carryover": total_credit_carryover,
                 "Total Supply": total_supply,
                 "Total Demand": total_demand,
                 "Net Demand": net_demand,
                 "Total Output": total_output,
-                "Allowance Price ($/MTCO2e)": allowance_price,
-                "Total Abatement (MTCO2e)": total_abatement,
-                "Total Abatement Cost ($)": total_abatement_cost
+                "Allowance Price ($/MTCO2e)": allowance_price
             }
             market_summaries.append(summary)
 
@@ -87,7 +78,7 @@ def run_trading_model(start_year=2025, end_year=2035):
             facility_summary = model.facilities_data[[
                 "Facility ID", f"Allocations_{year}", f"Emissions_{year}",
                 f"Allowance Surplus/Deficit_{year}", f"Trade Volume_{year}",
-                f"Trade Cost_{year}", f"Abatement Cost_{year}", f"Tonnes Abated_{year}"
+                f"Trade Cost_{year}", f"Abatement Cost_{year}", "Credit Carryover"
             ]].copy()
             facility_summary["Year"] = year
             facility_summary = facility_summary.rename(columns={
@@ -96,8 +87,7 @@ def run_trading_model(start_year=2025, end_year=2035):
                 f"Allowance Surplus/Deficit_{year}": "Allowance Surplus/Deficit",
                 f"Trade Volume_{year}": "Trade Volume",
                 f"Trade Cost_{year}": "Trade Cost",
-                f"Abatement Cost_{year}": "Abatement Cost",
-                f"Tonnes Abated_{year}": "Tonnes Abated"
+                f"Abatement Cost_{year}": "Abatement Cost"
             })
 
             # Calculate cost breakdown
