@@ -138,7 +138,6 @@ class obamodel:
                 deficit -= trade_volume
                 print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
 
-
     def determine_market_price(self, supply, demand, year):
         print(f"Determining market price for year {year}: Supply={supply}, Demand={demand}")
         
@@ -173,8 +172,40 @@ class obamodel:
         print(f"Year {year}: Market Price set to {self.market_price}")
         self.facilities_data[f'Allowance Price_{year}'] = self.market_price
 
-
-
+    def determine_market_price(self, supply, demand, year):
+        print(f"Determining market price for year {year}: Supply={supply}, Demand={demand}")
+        
+        if supply > 0 and demand > 0:
+            sorted_abatement_costs = []
+            for index, facility in self.facilities_data.iterrows():
+                facility_curve = self.abatement_cost_curve[
+                    self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+                ]
+                if not facility_curve.empty:
+                    slope = float(facility_curve['Slope'].values[0])
+                    intercept = float(facility_curve['Intercept'].values[0])
+                    max_reduction = int(facility_curve['Max Reduction (MTCO2e)'].values[0])
+                    sorted_abatement_costs.extend(
+                        [slope * x + intercept for x in range(1, max_reduction + 1)]
+                    )
+            
+            if sorted_abatement_costs:
+                sorted_abatement_costs = sorted(sorted_abatement_costs)
+                self.market_price = sorted_abatement_costs[min(int(demand), len(sorted_abatement_costs) - 1)]
+            else:
+                self.market_price = 10  # Default low price
+                print(f"Warning: No abatement cost data available. Market price set to {self.market_price}.")
+        elif supply == 0:
+            self.market_price = 200  # High price due to lack of supply
+        else:
+            self.market_price = 10  # Default low price when demand is zero
+        
+        if self.market_price == 0:
+            print(f"Error: Market price is zero for year {year}.")
+        
+        print(f"Year {year}: Market Price set to {self.market_price}")
+        self.facilities_data[f'Allowance Price_{year}'] = self.market_price
+  
     def run_model(self, start_year, end_year, output_file="reshaped_combined_summary.csv"):
         print("Running emissions trading model...")
         market_summary = []
