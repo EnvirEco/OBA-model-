@@ -201,7 +201,6 @@ class obamodel:
             'Allowance Price ($/MTCO2e)': self.market_price
         }
         return summary
-        
     
     def save_reshaped_facility_summary(self, start_year, end_year, output_file):
         reshaped_data = []
@@ -229,7 +228,7 @@ class obamodel:
                 id_vars=["Facility ID", "Year"],
                 var_name="Variable Name", value_name="Value"
             ))
-
+    
         reshaped_combined_data = pd.concat(reshaped_data, ignore_index=True)
         reshaped_combined_data.to_csv(output_file, index=False)
         print(f"Reshaped facility summary saved to {output_file}")
