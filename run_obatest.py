@@ -87,7 +87,8 @@ def run_trading_model(start_year=2025, end_year=2035):
             facility_summary = model.facilities_data[[
                 "Facility ID", f"Allocations_{year}", f"Emissions_{year}",
                 f"Allowance Surplus/Deficit_{year}", f"Trade Volume_{year}",
-                f"Trade Cost_{year}", f"Abatement Cost_{year}", f"Tonnes Abated_{year}"
+                f"Trade Cost_{year}", f"Abatement Cost_{year}", f"Tonnes Abated_{year}",
+                f"Allowance Purchase Cost_{year}", f"Allowance Sales Revenue_{year}", f"Total Cost_{year}"
             ]].copy()
             facility_summary["Year"] = year
             facility_summary = facility_summary.rename(columns={
@@ -97,14 +98,36 @@ def run_trading_model(start_year=2025, end_year=2035):
                 f"Trade Volume_{year}": "Trade Volume",
                 f"Trade Cost_{year}": "Trade Cost",
                 f"Abatement Cost_{year}": "Abatement Cost",
-                f"Tonnes Abated_{year}": "Tonnes Abated"
+                f"Tonnes Abated_{year}": "Tonnes Abated",
+                f"Allowance Purchase Cost_{year}": "Allowance Purchase Cost",
+                f"Allowance Sales Revenue_{year}": "Allowance Sales Revenue",
+                f"Total Cost_{year}": "Total Cost"
             })
 
-            # Calculate cost breakdown
-            facility_summary["Compliance Cost"] = facility_summary["Trade Cost"] + facility_summary["Abatement Cost"]
-            facility_summary["Cost to Profit Ratio"] = facility_summary["Compliance Cost"] / facility_summary["Allocations"]
-            facility_summary["Cost to Output Ratio"] = facility_summary["Compliance Cost"] / model.facilities_data[f"Output_{year}"]
+            # Calculate profits using Baseline Profit Rate
+            facility_summary["Profit"] = (
+                model.facilities_data[f"Output_{year}"] * model.facilities_data["Baseline Profit Rate"]
+            )
 
+            # Calculate cost breakdown
+            facility_summary["Compliance Cost"] = (
+                facility_summary["Allowance Purchase Cost"] + facility_summary["Abatement Cost"]
+            )
+            facility_summary["Cost to Profit Ratio"] = (
+                facility_summary["Compliance Cost"] / facility_summary["Profit"]
+            ).fillna(0)
+            facility_summary["Cost to Output Ratio"] = (
+                facility_summary["Compliance Cost"] / model.facilities_data[f"Output_{year}"]
+            ).fillna(0)
+
+            # Add new Total Cost ratios
+            facility_summary["Total Cost to Profit Ratio"] = (
+                facility_summary["Total Cost"] / facility_summary["Profit"]
+            ).fillna(0)
+            facility_summary["Total Cost to Output Ratio"] = (
+                facility_summary["Total Cost"] / model.facilities_data[f"Output_{year}"]
+            ).fillna(0)
+          
             annual_facility_summaries.append(facility_summary)
 
         pd.DataFrame(market_summaries).to_csv(market_summary_file, index=False)
