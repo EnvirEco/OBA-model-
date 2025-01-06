@@ -16,42 +16,31 @@ class obamodel:
     def initialize_columns(self):
         required_columns = [
             'Ceiling Price Payment', 'Tonnes Paid at Ceiling',
-            'Allowance Price ($/MTCO2e)', 'Trade Volume', 
+            'Allowance Price ($/MTCO2e)', 'Trade Volume',
             'Abatement Cost', 'Allowance Sales Revenue', 'Allowance Purchase Cost'
         ]
-        year_columns = []
-        for year in range(self.start_year, self.start_year + 20):  # Estimate 20 years
-            year_columns.extend([
-                f"Output_{year}", f"Emissions_{year}", f"Benchmark_{year}",
-                f"Allocations_{year}", f"Allowance Surplus/Deficit_{year}",
-                f"Abatement Cost_{year}", f"Trade Cost_{year}",
-                f"Total Cost_{year}", f"Trade Volume_{year}",
-                f"Allowance Price_{year}", f"Tonnes Abated_{year}",
-                f"Allowance Purchase Cost_{year}", f"Allowance Sales Revenue_{year}"
-            ])
-        
-        for column in required_columns + year_columns:
-            if column not in self.facilities_data.columns:
-                self.facilities_data[column] = 0.0
-
-    def calculate_dynamic_values(self, year):
-        print(f"Calculating dynamic values for year {year}...")
-        years_since_start = year - self.start_year
-        
-        # Calculate dynamic outputs, emissions, and benchmarks
-        self.facilities_data[f'Output_{year}'] = (
-            self.facilities_data['Baseline Output'] * (1 + self.facilities_data['Output Growth Rate']) ** years_since_start
-        )
-        self.facilities_data[f'Emissions_{year}'] = (
-            self.facilities_data['Baseline Emissions'] * (1 + self.facilities_data['Emissions Growth Rate']) ** years_since_start
-        )
-        self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] * (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_since_start
-        )
+        year_columns = [
+            f"{metric}_{year}" for year in range(self.start_year, self.start_year + 20)
+            for metric in [
+                "Output", "Emissions", "Benchmark", "Allocations",
+                "Allowance Surplus/Deficit", "Abatement Cost", "Trade Cost",
+                "Total Cost", "Trade Volume", "Allowance Price",
+                "Tonnes Abated", "Allowance Purchase Cost", "Allowance Sales Revenue",
+                "Compliance Cost", "Cost to Profit Ratio", "Cost to Output Ratio"
+            ]
+        ]
     
-        # Debugging dynamic values
-        print(f"Year {year} Dynamic Values Summary:")
-        print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
+        # Add missing columns all at once to avoid fragmentation
+        all_columns = required_columns + year_columns
+        missing_columns = [col for col in all_columns if col not in self.facilities_data.columns]
+        for col in missing_columns:
+            self.facilities_data[col] = 0.0
+    
+        # Ensure the 'Profit' column is calculated
+        if 'Profit' not in self.facilities_data.columns:
+            self.facilities_data['Profit'] = (
+                self.facilities_data['Baseline Output'] * self.facilities_data['Baseline Profit Rate']
+            )
 
     def calculate_dynamic_allowance_surplus_deficit(self, year):
         print(f"Calculating dynamic allowance surplus/deficit for year {year}...")
@@ -81,39 +70,8 @@ class obamodel:
             print(f"Warning: Total demand is zero for year {year}. This may result in no trades or market price changes.")
         
         print(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].describe())
-
+    
         return total_supply, total_demand
-
-
-    def calculate_abatement_costs(self, year):
-      print(f"Calculating abatement costs for year {year}...")
-      for index, facility in self.facilities_data.iterrows():
-          surplus_deficit = facility[f'Allowance Surplus/Deficit_{year}']
-          if surplus_deficit < 0:  # Facility has a deficit
-              facility_curve = self.abatement_cost_curve[
-                  self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-              ]
-              if not facility_curve.empty:
-                  slope = float(facility_curve['Slope'].values[0])
-                  intercept = float(facility_curve['Intercept'].values[0])
-                  max_reduction = float(facility_curve['Max Reduction (MTCO2e)'].values[0])
-  
-                  abated = 0
-                  abatement_cost = 0
-                  while abs(surplus_deficit) > 0 and abated < max_reduction:
-                      marginal_abatement_cost = slope * abated + intercept
-                      if marginal_abatement_cost > self.market_price:
-                          break  # Abatement no longer cost-effective
-  
-                      increment = min(abs(surplus_deficit), max_reduction - abated)
-                      abated += increment
-                      abatement_cost += marginal_abatement_cost * increment
-                      surplus_deficit += increment
-                    
-                  # Update facility data
-                  self.facilities_data.at[index, f'Tonnes Abated_{year}'] = abated
-                  self.facilities_data.at[index, f'Abatement Cost_{year}'] = abatement_cost
-                  self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abated
 
     def trade_allowances(self, year):
         print(f"Trading allowances for year {year}...")
@@ -152,41 +110,115 @@ class obamodel:
                 self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += trade_cost
     
                 deficit -= trade_volume
+                
+                # Debugging each trade
                 print(f"Trade executed: Buyer {buyer_idx}, Seller {seller_idx}, Volume: {trade_volume}, Cost: {trade_cost}")
+                print(f"Post-trade Buyer Surplus/Deficit: {self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}']}")
+                print(f"Post-trade Seller Surplus/Deficit: {self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}']}")
+    
 
+    def calculate_abatement_costs(self, year):
+        print(f"Calculating abatement costs for year {year}...")
+        remaining_deficit = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum()
+        iteration = 0
+        previous_deficit = None
+    
+        while remaining_deficit < 0:
+            iteration += 1
+            if previous_deficit == remaining_deficit:
+                print(f"No further abatement progress possible in iteration {iteration}. Breaking loop.")
+                break  # Break if no progress is made
+            
+            previous_deficit = remaining_deficit
+            print(f"Iteration {iteration}: Remaining deficit = {remaining_deficit}")
+    
+            for index, facility in self.facilities_data.iterrows():
+                surplus_deficit = facility[f'Allowance Surplus/Deficit_{year}']
+                if surplus_deficit < 0:  # Facility has a deficit
+                    facility_curve = self.abatement_cost_curve[
+                        self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+                    ]
+                    if not facility_curve.empty:
+                        slope = float(facility_curve['Slope'].values[0])
+                        intercept = float(facility_curve['Intercept'].values[0])
+                        max_reduction = float(facility_curve['Max Reduction (MTCO2e)'].values[0])
+    
+                        abated = self.facilities_data.at[index, f'Tonnes Abated_{year}']
+                        abatement_cost = self.facilities_data.at[index, f'Abatement Cost_{year}']
+                        while abs(surplus_deficit) > 0 and abated < max_reduction:
+                            marginal_abatement_cost = slope * abated + intercept
+                            if marginal_abatement_cost > self.market_price:
+                                break  # Abatement no longer cost-effective
+    
+                            increment = min(abs(surplus_deficit), max_reduction - abated, 0.01)
+                            abated += increment
+                            abatement_cost += marginal_abatement_cost * increment
+                            surplus_deficit += increment
+                        
+                        # Update facility data
+                        self.facilities_data.at[index, f'Tonnes Abated_{year}'] = abated
+                        self.facilities_data.at[index, f'Abatement Cost_{year}'] = abatement_cost
+                        self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] += abated
+            
+            remaining_deficit = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum()
+
+    def calculate_dynamic_values(self, year):
+        print(f"Calculating dynamic values for year {year}...")
+        years_since_start = year - self.start_year
+        
+        # Calculate dynamic outputs, emissions, and benchmarks
+        self.facilities_data[f'Output_{year}'] = (
+            self.facilities_data['Baseline Output'] * (1 + self.facilities_data['Output Growth Rate']) ** years_since_start
+        )
+        self.facilities_data[f'Emissions_{year}'] = (
+            self.facilities_data['Baseline Emissions'] * (1 + self.facilities_data['Emissions Growth Rate']) ** years_since_start
+        )
+        self.facilities_data[f'Benchmark_{year}'] = (
+            self.facilities_data['Baseline Benchmark'] * (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_since_start
+        )
+    
+        # Debugging dynamic values
+        print(f"Year {year} Dynamic Values Summary:")
+        print(self.facilities_data[[f'Output_{year}', f'Emissions_{year}', f'Benchmark_{year}']].describe())
+
+    
 
     def determine_market_price(self, supply, demand, year):
-      print(f"Determining market price for year {year}: Supply={supply}, Demand={demand}")
-      
-      if supply > 0 and demand > 0:
-          sorted_abatement_costs = []
-          for index, facility in self.facilities_data.iterrows():
-              facility_curve = self.abatement_cost_curve[
-                  self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-              ]
-              if not facility_curve.empty:
-                  slope = float(facility_curve['Slope'].values[0])
-                  intercept = float(facility_curve['Intercept'].values[0])
-                  max_reduction = int(facility_curve['Max Reduction (MTCO2e)'].values[0])
-                  sorted_abatement_costs.extend(
-                      [slope * x + intercept for x in range(1, max_reduction + 1)]
-                  )
-          
-          if sorted_abatement_costs:
-              sorted_abatement_costs = sorted(sorted_abatement_costs)
-              effective_demand = min(int(demand), len(sorted_abatement_costs) - 1)
-              self.market_price = sorted_abatement_costs[effective_demand]
-          else:
-              print(f"Warning: No abatement cost data available. Market price remains zero.")
-              self.market_price = 0
-      elif supply == 0:
-          self.market_price = 200  # Arbitrary high price due to lack of supply
-      else:
-          self.market_price = 0  # No demand
-      
-      print(f"Year {year}: Market Price set to {self.market_price}")
-      self.facilities_data[f'Allowance Price_{year}'] = self.market_price
+        print(f"Determining market price for year {year}: Supply={supply}, Demand={demand}")
+    
+        if supply > 0 and demand > 0:
+            sorted_abatement_costs = []
+            for _, facility in self.facilities_data.iterrows():
+                facility_curve = self.abatement_cost_curve[
+                    self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+                ]
+                if not facility_curve.empty:
+                    slope = float(facility_curve['Slope'].values[0])
+                    intercept = float(facility_curve['Intercept'].values[0])
+                    max_reduction = int(facility_curve['Max Reduction (MTCO2e)'].values[0])
+                    sorted_abatement_costs.extend(
+                        [slope * x + intercept for x in range(1, max_reduction + 1)]
+                    )
+            
+            if sorted_abatement_costs:
+                sorted_abatement_costs.sort()
+                effective_demand = min(int(demand), len(sorted_abatement_costs))
+                self.market_price = sorted_abatement_costs[effective_demand - 1] if effective_demand > 0 else 0
+            else:
+                print(f"Warning: No valid abatement costs found. Setting market price to floor price.")
+                self.market_price = self.floor_price
+        elif supply == 0:
+            self.market_price = self.ceiling_price
+        elif demand == 0:
+            self.market_price = self.floor_price
+        else:
+            self.market_price = 0
+    
+        print(f"Year {year}: Market Price set to {self.market_price}")
+        self.facilities_data[f'Allowance Price_{year}'] = self.market_price
 
+
+           
     def run_model(self, start_year, end_year, output_file="reshaped_combined_summary.csv"):
         print("Running emissions trading model...")
         market_summary = []
@@ -196,25 +228,43 @@ class obamodel:
             
             # Calculate dynamic allowance surplus/deficit
             total_supply, total_demand = self.calculate_dynamic_allowance_surplus_deficit(year)
+            print(f"Debug: Year {year} Total Supply = {total_supply}, Total Demand = {total_demand}")
             
             # Adjust small discrepancies to avoid negative rounding errors
             self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
                 self.facilities_data[f'Allowance Surplus/Deficit_{year}'].round(6)
             )
-# Determine market price
+            # Determine market price
             self.determine_market_price(total_supply, total_demand, year)
             
             # Calculate abatement costs
             self.calculate_abatement_costs(year)
-            
+
+                       
             # Execute trading logic
             self.trade_allowances(year)
-            
+            print(f"Debug: Year {year} Total Supply (post-trading) = {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()}")
+            print(f"Debug: Year {year} Total Demand (post-trading) = {abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())}")
+            print(f"Debug: Year {year} Trade Volume = {self.facilities_data[f'Trade Volume_{year}'].sum()}")
+            print(f"Debug: Year {year} Final Market Price: {self.market_price}")
+
+            print(f"Debug: Pre-trade Total Supply: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()}")
+            print(f"Debug: Pre-trade Total Demand: {abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())}")
+            print(f"Debug: Market Price for Year {year}: {self.market_price}")
+            print(f"Debug: Post-trade Total Supply: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()}")
+            print(f"Debug: Post-trade Total Demand: {abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())}")
+
+            print(f"Debug: Year {year} Total Trade Volume: {self.facilities_data[f'Trade Volume_{year}'].sum()}")
+            print(f"Debug: Year {year} Total Trade Cost: {self.facilities_data[f'Trade Cost_{year}'].sum()}")
+
+
             # Ensure total demand is captured
-            if total_demand > 0:
-                print(f"Year {year} Demand: {total_demand} MTCO2e")
+            total_demand = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+            if total_demand == 0:
+                print(f"Warning: Demand is zero for year {year}, but there are deficits.")
             else:
-                print(f"Year {year} Demand is incorrectly reported as zero.")
+                print(f"Year {year} Debug: Total Demand = {total_demand}")
+
 
             # Calculate compliance cost for each facility
             self.facilities_data[f'Compliance Cost_{year}'] = (
@@ -224,10 +274,20 @@ class obamodel:
 
             # Calculate total costs for each facility
             self.facilities_data[f'Total Cost_{year}'] = (
-                self.facilities_data[f'Abatement Cost_{year}'] +
-                self.facilities_data['Allowance Purchase Cost'] -
-                self.facilities_data['Allowance Sales Revenue']
+              self.facilities_data[f'Abatement Cost_{year}'] +
+              self.facilities_data[f'Allowance Purchase Cost_{year}'] -
+              self.facilities_data[f'Allowance Sales Revenue_{year}']
             )
+
+            # Calculate cost ratios (year-specific)
+            self.facilities_data[f'Cost to Profit Ratio_{year}'] = (
+                self.facilities_data[f'Total Cost_{year}'] / self.facilities_data['Profit']
+            ).replace([float('inf'), -float('inf')], 0).fillna(0)
+            
+            self.facilities_data[f'Cost to Output Ratio_{year}'] = (
+                self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
+            ).replace([float('inf'), -float('inf')], 0).fillna(0)
+          
             # Collect market-level data
             total_abatement = self.facilities_data[f'Tonnes Abated_{year}'].sum()
             market_summary.append({
@@ -236,7 +296,10 @@ class obamodel:
                 "Total Demand (MTCO2e)": total_demand,
                 "Net Demand (MTCO2e)": total_demand - total_supply,
                 "Market Price ($/MTCO2e)": self.market_price,
-                "Total Abatement (MTCO2e)": total_abatement,
+                "Total Trade Volume (MTCO2e)": self.facilities_data[f'Trade Volume_{year}'].sum(),
+                "Total Trade Cost ($)": self.facilities_data[f'Trade Cost_{year}'].sum(),
+                "Total Abatement (MTCO2e)": self.facilities_data[f'Tonnes Abated_{year}'].sum(),
+                "Total Abatement Cost ($)": self.facilities_data[f'Abatement Cost_{year}'].sum()
             })
             
             print(f"Year {year} complete.")
@@ -253,16 +316,18 @@ class obamodel:
         print("Model run complete.")
 
     def save_reshaped_facility_summary(self, start_year, end_year, output_file):
-        reshaped_data = []
+        reshaped_data = [] # Initialize as an empty list
+        
         for year in range(start_year, end_year + 1):
             year_data = self.facilities_data[[
-               "Facility ID", f"Emissions_{year}", f"Benchmark_{year}",
+                "Facility ID", f"Emissions_{year}", f"Benchmark_{year}",
                 f"Allocations_{year}", f"Allowance Surplus/Deficit_{year}",
                 f"Abatement Cost_{year}", f"Trade Cost_{year}",
                 f"Total Cost_{year}", f"Compliance Cost_{year}",
                 f"Trade Volume_{year}", f"Allowance Price_{year}",
                 f"Tonnes Abated_{year}", f"Allowance Purchase Cost_{year}",
-                f"Allowance Sales Revenue_{year}"
+                f"Allowance Sales Revenue_{year}", f"Cost to Profit Ratio_{year}",
+                f"Cost to Output Ratio_{year}"
             ]].copy()
             year_data.rename(columns={
                 f"Emissions_{year}": "Emissions",
@@ -279,12 +344,18 @@ class obamodel:
                 f"Allowance Purchase Cost_{year}": "Allowance Purchase Cost",
                 f"Allowance Sales Revenue_{year}": "Allowance Sales Revenue"
             }, inplace=True)
+            
             year_data["Year"] = year
+            
             reshaped_data.append(year_data.melt(
                 id_vars=["Facility ID", "Year"],
                 var_name="Variable Name", value_name="Value"
             ))
-        reshaped_combined_data = pd.concat(reshaped_data, ignore_index=True)
+
+          
+         # Concatenate all yearly reshaped data
+        reshaped_combined_data = pd.concat(reshaped_data, ignore_index=True).drop_duplicates()
+
+        # Save reshaped combined data to CSV
         reshaped_combined_data.to_csv(output_file, index=False)
         print(f"Reshaped facility summary saved to {output_file}")
-
