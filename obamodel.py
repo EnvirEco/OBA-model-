@@ -10,7 +10,7 @@ class obamodel:
         self.start_year = start_year
         
         # Market parameters
-        self.floor_price = 0.0
+        self.floor_price = 5.0
         self.ceiling_price = 1000.0
         self.price_change_limit = 0.15  # 15% max price change between periods
         self.market_price = 0.0
@@ -68,14 +68,9 @@ class obamodel:
         self.facilities_data = self.facilities_data.copy()
 
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values for given year."""
         years_elapsed = year - self.start_year
         
-        print(f"\nYear {year} Pre-calculation:")
-        print(f"Average Emissions: {self.facilities_data['Baseline Emissions'].mean()}")
-        print(f"Average Benchmark: {self.facilities_data['Baseline Benchmark'].mean()}")
-        
-        # Direct calculations instead of calling calculate_values
+        # Calculate output and emissions
         self.facilities_data[f'Output_{year}'] = (
             self.facilities_data['Baseline Output'] * 
             (1 + self.facilities_data['Output Growth Rate']) ** years_elapsed
@@ -90,6 +85,20 @@ class obamodel:
             self.facilities_data['Baseline Benchmark'] * 
             (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
         )
+        
+        # Calculate allocations
+        self.facilities_data[f'Allocations_{year}'] = (
+            self.facilities_data[f'Output_{year}'] * 
+            self.facilities_data[f'Benchmark_{year}']
+        )
+        
+        # Calculate initial surplus/deficit
+        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
+            self.facilities_data[f'Allocations_{year}'] - 
+            self.facilities_data[f'Emissions_{year}']
+        )
+        
+        print(f"Supply check: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()}")
         
         print(f"\nYear {year} Post-calculation:")
         print(f"Average Emissions: {self.facilities_data[f'Emissions_{year}'].mean()}")
@@ -117,33 +126,30 @@ class obamodel:
 
             
     def _build_mac_curve(self, year: int) -> List[float]:
-        mac_points = []
-        deficits = self.facilities_data[
-            self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0
-        ]
-        
-        print(f"Building MAC curve for year {year}")
-        print(f"Total deficit: {abs(deficits[f'Allowance Surplus/Deficit_{year}'].sum())}")
-        
-        for _, facility in deficits.iterrows():
-            curve = self.abatement_cost_curve[
-                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ].iloc[0]
-            
-            deficit = abs(facility[f'Allowance Surplus/Deficit_{year}'])
-            max_reduction = min(curve['Max Reduction (MTCO2e)'], deficit)
-            
-            steps = 100
-            for i in range(steps):
-                qty = max_reduction * (i + 1) / steps
-                mac = curve['Slope'] * qty + curve['Intercept']
-                if mac <= self.ceiling_price:
-                    mac_points.append(mac)
-        
-        print(f"MAC points: {len(mac_points)}")
-        print(f"MAC range: {min(mac_points) if mac_points else 0} - {max(mac_points) if mac_points else 0}")
-        return sorted(mac_points)
-
+       mac_points = []
+       deficits = self.facilities_data[
+           self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0
+       ]
+       
+       for _, facility in deficits.iterrows():
+           curve = self.abatement_cost_curve[
+               self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+           ].iloc[0]
+           
+           deficit = abs(facility[f'Allowance Surplus/Deficit_{year}'])
+           max_reduction = min(curve['Max Reduction (MTCO2e)'], deficit)
+           
+           steps = 100
+           for i in range(steps):
+               qty = max_reduction * (i + 1) / steps
+               mac = curve['Slope'] * qty + curve['Intercept'] 
+               if mac > 0 and mac <= self.ceiling_price:
+                   mac_points.append(mac)
+                   
+       if not mac_points:
+           return [self.floor_price]
+           
+       return sorted(mac_points)
     
     def _apply_abatement(self, idx: int, amount: float, cost: float, year: int) -> None:
         self.facilities_data.at[idx, f'Tonnes Abated_{year}'] = amount
@@ -182,48 +188,40 @@ class obamodel:
 
              
     def execute_trades(self, year: int) -> None:
-       MIN_TRADE = 0.001
-       
+       if self.market_price <= 0:
+           return
+           
        while True:
            buyers = self.facilities_data[
-               self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < -MIN_TRADE
+               self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0
            ].sort_values(f'Allowance Surplus/Deficit_{year}')
            
            sellers = self.facilities_data[
-               self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > MIN_TRADE
+               self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0
            ].sort_values(f'Allowance Surplus/Deficit_{year}', ascending=False)
            
            if buyers.empty or sellers.empty:
                break
                
+           traded = False
            for buyer_idx, buyer in buyers.iterrows():
                deficit = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
-               if deficit < MIN_TRADE:
-                   continue
-                   
+               
                for seller_idx, seller in sellers.iterrows():
                    surplus = seller[f'Allowance Surplus/Deficit_{year}']
-                   if surplus < MIN_TRADE:
-                       continue
+                   volume = min(deficit, surplus)
+                   
+                   if volume > 0:
+                       cost = volume * self.market_price
+                       self._update_trade_positions(buyer_idx, seller_idx, volume, cost, year)
+                       traded = True
+                       break
                        
-                   trade_volume = min(deficit, surplus)
-                   if trade_volume < MIN_TRADE:
-                       continue
-                       
-                   trade_cost = trade_volume * self.market_price  
-                   
-                   # Update positions and costs
-                   self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += trade_volume
-                   self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
-                   self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
-                   self.facilities_data.at[buyer_idx, f'Allowance Purchase Cost_{year}'] += trade_cost
-                   
-                   self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] -= trade_volume
-                   self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume  
-                   self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
-                   self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += trade_cost
-                   
+               if traded:
                    break
+                   
+           if not traded:
+               break
 
     def _update_trade_positions(self, buyer_idx: int, seller_idx: int, volume: float, cost: float, year: int) -> None:
        # Update buyer
