@@ -1,4 +1,4 @@
-```python
+# run_obatest.py
 import pandas as pd
 import os
 from obamodel import obamodel
@@ -113,4 +113,3 @@ if __name__ == "__main__":
         
     except Exception as e:
         print(f"\nSimulation failed: {e}")
-```
