@@ -73,26 +73,37 @@ class obamodel:
             )
 
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values for a given year."""
+        """Calculate dynamic values for output, emissions, and allocations with detailed diagnostics."""
         years_elapsed = year - self.start_year
         
-        # Calculate output and emissions
-        self.facilities_data[f'Output_{year}'] = (
+        print(f"\n=== Dynamic Value Analysis for Year {year} ===")
+        print(f"Years elapsed: {years_elapsed}")
+        
+        # Calculate and store initial values for comparison
+        baseline_allocations = (
             self.facilities_data['Baseline Output'] * 
-            (1 + self.facilities_data['Output Growth Rate']) ** years_elapsed
+            self.facilities_data['Baseline Benchmark']
         )
         
-        self.facilities_data[f'Emissions_{year}'] = (
-            self.facilities_data['Baseline Emissions'] * 
-            (1 + self.facilities_data['Emissions Growth Rate']) ** years_elapsed
-        )
-        
+        # Calculate benchmark with ratchet
         self.facilities_data[f'Benchmark_{year}'] = (
             self.facilities_data['Baseline Benchmark'] * 
             (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
         )
         
-        # Calculate allocations
+        # Calculate output with growth
+        self.facilities_data[f'Output_{year}'] = (
+            self.facilities_data['Baseline Output'] * 
+            (1 + self.facilities_data['Output Growth Rate']) ** years_elapsed
+        )
+        
+        # Calculate emissions with growth
+        self.facilities_data[f'Emissions_{year}'] = (
+            self.facilities_data['Baseline Emissions'] * 
+            (1 + self.facilities_data['Emissions Growth Rate']) ** years_elapsed
+        )
+        
+        # Calculate allocations with minimum provision
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * 
             self.facilities_data[f'Benchmark_{year}']
@@ -104,10 +115,40 @@ class obamodel:
             self.facilities_data[f'Emissions_{year}']
         )
         
-        print(f"\nYear {year} Dynamic Values:")
-        print(f"Average Output: {self.facilities_data[f'Output_{year}'].mean():,.2f}")
-        print(f"Average Emissions: {self.facilities_data[f'Emissions_{year}'].mean():,.2f}")
-        print(f"Average Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():,.4f}")
+        # Print diagnostic information
+        print("\nBenchmark Analysis:")
+        print(f"Average Starting Benchmark: {self.facilities_data['Baseline Benchmark'].mean():.4f}")
+        print(f"Average Current Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():.4f}")
+        print(f"Benchmark Reduction: {((1 - self.facilities_data[f'Benchmark_{year}'].mean() / self.facilities_data['Baseline Benchmark'].mean()) * 100):.1f}%")
+        
+        print("\nOutput Analysis:")
+        print(f"Total Baseline Output: {self.facilities_data['Baseline Output'].sum():,.0f}")
+        print(f"Total Current Output: {self.facilities_data[f'Output_{year}'].sum():,.0f}")
+        print(f"Output Growth: {((self.facilities_data[f'Output_{year}'].sum() / self.facilities_data['Baseline Output'].sum() - 1) * 100):.1f}%")
+        
+        print("\nEmissions Analysis:")
+        print(f"Total Baseline Emissions: {self.facilities_data['Baseline Emissions'].sum():,.0f}")
+        print(f"Total Current Emissions: {self.facilities_data[f'Emissions_{year}'].sum():,.0f}")
+        print(f"Emissions Growth: {((self.facilities_data[f'Emissions_{year}'].sum() / self.facilities_data['Baseline Emissions'].sum() - 1) * 100):.1f}%")
+        
+        print("\nAllocation Analysis:")
+        print(f"Total Baseline Allocations: {baseline_allocations.sum():,.0f}")
+        print(f"Total Current Allocations: {self.facilities_data[f'Allocations_{year}'].sum():,.0f}")
+        print(f"Allocation Change: {((self.facilities_data[f'Allocations_{year}'].sum() / baseline_allocations.sum() - 1) * 100):.1f}%")
+        
+        # Market balance analysis
+        total_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
+        total_deficit = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+        
+        print("\nMarket Balance Analysis:")
+        print(f"Total Surplus: {total_surplus:,.2f}")
+        print(f"Total Deficit: {total_deficit:,.2f}")
+        print(f"Net Position: {(total_surplus - total_deficit):,.2f}")
+        
+        # Check for severe imbalance
+        if total_surplus == 0 or total_deficit == 0:
+            print("\nWARNING: Market imbalance detected!")
+            print("Consider adjusting benchmark ratchet rate or implementing minimum allocation provisions.")
 
     def calculate_dynamic_allowance_surplus_deficit(self, year: int) -> Tuple[float, float]:
         """Calculate supply and demand for a given year."""
@@ -227,19 +268,25 @@ class obamodel:
         print(f"\n=== Trading Analysis for Year {year} ===")
         
         # Pre-trade analysis
-        pre_trade = self.analyze_market_positions(year)
+        buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
+        sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
         
-        if self.market_price <= 0:
-            print(f"Warning: Invalid market price (${self.market_price:,.2f})")
-            return
-
-        buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0].copy()
-        sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0].copy()
+        print("\nPre-trade Positions:")
+        print(f"Buyers found: {len(buyers)} with total deficit: {abs(buyers[f'Allowance Surplus/Deficit_{year}'].sum()):,.2f}")
+        print(f"Sellers found: {len(sellers)} with total surplus: {sellers[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
         
         if buyers.empty or sellers.empty:
-            print("No valid trading pairs found")
-            return
-
+            print("\nMarket imbalance detected!")
+            print("\nEmissions vs Allocations:")
+            print(self.facilities_data[[
+                'Facility ID',
+                f'Emissions_{year}',
+                f'Allocations_{year}',
+                f'Allowance Surplus/Deficit_{year}'
+            ]].to_string())
+            return  # Exit if no trading pairs found
+        
+        # Execute trades
         trades_executed = []
         for buyer_idx, buyer in buyers.iterrows():
             deficit = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
@@ -263,6 +310,7 @@ class obamodel:
                     if deficit <= 0:
                         break
         
+        # Report results
         if trades_executed:
             trades_df = pd.DataFrame(trades_executed)
             print("\nTrades Executed:")
@@ -287,20 +335,29 @@ class obamodel:
         self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += trade_cost
 
     def analyze_market_positions(self, year: int) -> pd.DataFrame:
-        """Analyze market positions for diagnostic purposes."""
-        positions = pd.DataFrame({
-            'Facility ID': self.facilities_data['Facility ID'],
-            'Initial_Allocations': self.facilities_data[f'Allocations_{year}'],
-            'Emissions': self.facilities_data[f'Emissions_{year}'],
-            'Surplus_Deficit': self.facilities_data[f'Allowance Surplus/Deficit_{year}'],
-            'Abatement_Potential': self.abatement_cost_curve['Max Reduction (MTCO2e)']
-        })
+        """Add detailed diagnostic logging for market positions."""
+        print(f"\n=== Market Position Analysis for Year {year} ===")
         
-        positions['Position'] = np.where(
-            positions['Surplus_Deficit'] > 0,
-            'Seller',
-            'Buyer'
-        )
+        positions = self.facilities_data[[
+            'Facility ID',
+            f'Allocations_{year}',
+            f'Emissions_{year}',
+            f'Allowance Surplus/Deficit_{year}'
+        ]].copy()
+        
+        print("\nAllocation Statistics:")
+        print(f"Total Allocations: {positions[f'Allocations_{year}'].sum():,.2f}")
+        print(f"Total Emissions: {positions[f'Emissions_{year}'].sum():,.2f}")
+        print(f"Net Position: {positions[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
+        
+        # Count buyers and sellers
+        buyers = positions[positions[f'Allowance Surplus/Deficit_{year}'] < 0]
+        sellers = positions[positions[f'Allowance Surplus/Deficit_{year}'] > 0]
+        
+        print(f"\nNumber of Buyers: {len(buyers)}")
+        print(f"Total Deficit: {abs(buyers[f'Allowance Surplus/Deficit_{year}'].sum()):,.2f}")
+        print(f"Number of Sellers: {len(sellers)}")
+        print(f"Total Surplus: {sellers[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
         
         return positions
 
