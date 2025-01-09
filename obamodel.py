@@ -3,6 +3,7 @@ import numpy as np
 from typing import Tuple, Dict, List
 
 class obamodel:
+    # 1. Initialization and Setup
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, start_year: int, end_year: int):
         """Initialize OBA model with configuration and market parameters."""
         self.facilities_data = facilities_data.copy()
@@ -35,7 +36,6 @@ class obamodel:
         # Initialize model
         self._validate_input_data()
         self._initialize_columns()
-
         
     def _validate_input_data(self) -> None:
         """Validate input data structure and relationships."""
@@ -89,6 +89,7 @@ class obamodel:
                 self.facilities_data['Baseline Profit Rate']
             )
 
+    # 2. Core Market Mechanisms
     def calculate_dynamic_values(self, year: int) -> None:
         """Calculate dynamic values for output, emissions, and allocations with robust diagnostics."""
         years_elapsed = year - self.start_year
@@ -206,8 +207,6 @@ class obamodel:
         print(f"Year {year} Market Price (Target: ${target_price:.2f}): ${self.market_price:.2f}")
         return self.market_price
 
-
-
     def _build_mac_curve(self, year: int) -> List[float]:
         """Build marginal abatement cost curve."""
         mac_points = []
@@ -243,7 +242,7 @@ class obamodel:
         print(f"MAC Curve: Min={min(mac_points):.2f}, Max={max(mac_points):.2f}, Points={len(mac_points)}")                  
                     
         return sorted(mac_points) if mac_points else [self.floor_price]
-
+        
     def calculate_abatement(self, year: int) -> None:
         """Calculate and apply optimal abatement for facilities with deficits."""
         print(f"\n=== Abatement Analysis for Year {year} ===")
@@ -285,7 +284,7 @@ class obamodel:
     
         # Log total abatement
         print(f"Year {year}: Total Abatement: {total_abatement:.2f}")
-
+        
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """Apply abatement results to the facility's data."""
         self.facilities_data.at[idx, f'Tonnes Abated_{year}'] += abated
@@ -296,7 +295,6 @@ class obamodel:
         print(f"Facility {self.facilities_data.at[idx, 'Facility ID']} - Year {year}:")
         print(f"  Abated: {abated:.2f}, Cost: ${cost:.2f}")
         print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
-
 
     def trade_allowances(self, year: int) -> None:
         """Execute allowance trades between facilities."""
@@ -362,6 +360,7 @@ class obamodel:
         self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
         self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += trade_cost
 
+    
     def analyze_market_positions(self, year: int) -> pd.DataFrame:
         """Add detailed diagnostic logging for market positions."""
         print(f"\n=== Market Position Analysis for Year {year} ===")
@@ -388,7 +387,8 @@ class obamodel:
         print(f"Total Surplus: {sellers[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
         
         return positions
-
+        
+    # 3. Cost and Performance Calculations
     def calculate_costs(self, year: int) -> None:
         """Calculate various cost metrics for facilities."""
         # Compliance costs
@@ -414,7 +414,8 @@ class obamodel:
         self.facilities_data[f'Cost to Output Ratio_{year}'] = (
             self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
         ).replace([float('inf'), -float('inf')], 0).fillna(0)
-
+    
+    # 4. Model Execution and Results
     def run_model(self, output_file: str = "reshaped_combined_summary.csv") -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Run the complete model simulation for the initialized time period."""
         print("Running emissions trading model...")
@@ -456,8 +457,6 @@ class obamodel:
         self.save_results(market_summary_df, facility_results, output_file)
         
         return market_summary_df, facility_results
-
-
 
     def _prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
         """Prepare facility results in long format."""
@@ -508,7 +507,9 @@ class obamodel:
         report.columns = ['Facility ID'] + metrics
         
         return report
-
+ 
+    # 5. Scenario Analysis
+    
     def _create_market_summary(self, year: int) -> Dict:
         """Create market summary dictionary for a specific year."""
         # Calculate total abatement from facilities
