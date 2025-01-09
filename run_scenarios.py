@@ -1,6 +1,7 @@
 # run_scenarios.py
 import os
 import pandas as pd
+from typing import Dict, Tuple
 from obamodel import obamodel
 
 def run_scenario_test():
@@ -16,7 +17,7 @@ def run_scenario_test():
     start_year = 2025
     end_year = 2035
     model = obamodel(facilities_data, abatement_cost_curve, 
-                    start_year, end_year)  # Add end_year parameter here
+                    start_year, end_year)
     
     # Run scenarios from scenarios directory
     scenarios_path = os.path.join(os.path.dirname(__file__), 'scenarios', 'scenarios.csv')
@@ -32,3 +33,4 @@ def run_scenario_test():
 
 if __name__ == "__main__":
     run_scenario_test()
+    return results
