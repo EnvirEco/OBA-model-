@@ -506,7 +506,7 @@ class obamodel:
         print("Running emissions trading model...")
         market_summary = []
         
-        for year in range(self.start_year, self.end_year + 1):
+        for year in range(self.start_year, self.end_year + 1):  # Use class attributes
             print(f"\nProcessing year {year}...")
             
             # Market operations
