@@ -8,7 +8,7 @@ class obamodel:
         self.facilities_data = facilities_data.copy()
         self.abatement_cost_curve = abatement_cost_curve
         self.start_year = start_year
-        self.end_year = end_year  # Properly defined here
+        self.end_year = end_year if end_year is not None else start_year + 10
 
        # Initialize baseline allocations as a column in facilities_data
         self.facilities_data['Baseline Allocations'] = (
