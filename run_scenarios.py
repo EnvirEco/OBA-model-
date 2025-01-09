@@ -12,8 +12,11 @@ def run_scenario_test():
     facilities_data = pd.read_csv(os.path.join(data_dir, "facilities_data.csv"))
     abatement_cost_curve = pd.read_csv(os.path.join(data_dir, "abatement_cost_curve.csv"))
     
-    # Initialize model
-    model = obamodel(facilities_data, abatement_cost_curve, start_year=2025)
+    # Initialize model with both start and end year
+    start_year = 2025
+    end_year = 2035
+    model = obamodel(facilities_data, abatement_cost_curve, 
+                    start_year, end_year)  # Add end_year parameter here
     
     # Run scenarios from scenarios directory
     scenarios_path = os.path.join(os.path.dirname(__file__), 'scenarios', 'scenarios.csv')
