@@ -3,30 +3,39 @@ import numpy as np
 from typing import Tuple, Dict, List
 
 class obamodel:
-    def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, start_year: int):
+    def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, start_year: int, end_year: int):
         """Initialize OBA model with configuration and market parameters."""
         self.facilities_data = facilities_data.copy()
         self.abatement_cost_curve = abatement_cost_curve
         self.start_year = start_year
-        
-      
-        # Initialize baseline_allocations
-        self.baseline_allocations = (
+        self.end_year = end_year  # Properly defined here
+
+       # Initialize baseline allocations as a column in facilities_data
+        self.facilities_data['Baseline Allocations'] = (
             self.facilities_data['Baseline Output'] * self.facilities_data['Baseline Benchmark']
         )
 
-        # Optional: Print for verification
-        print(f"Initialized baseline_allocations: {self.baseline_allocations.sum():,.2f}")
+        print(f"Initialized Baseline Allocations: {self.facilities_data['Baseline Allocations'].sum():,.2f}")
         
-      # Market parameters
+        # Market parameters
         self.floor_price = 5
         self.ceiling_price = 1000.0
         self.price_change_limit = 0.15  # 15% max price change between periods
         self.market_price = 0.0
         
+        # Initialize price schedule
+        self.price_schedule = {
+            year: 50 + 5 * (year - start_year) for year in range(start_year, end_year + 1)
+        }
+
+        print("Initialized price schedule:")
+        for year, price in self.price_schedule.items():
+            print(f"  Year {year}: ${price:.2f}")
+        
         # Initialize model
         self._validate_input_data()
         self._initialize_columns()
+
         
     def _validate_input_data(self) -> None:
         """Validate input data structure and relationships."""
@@ -81,37 +90,51 @@ class obamodel:
             )
 
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values for output, emissions, and allocations with abatement feedback."""
+        """Calculate dynamic values for output, emissions, and allocations with robust diagnostics."""
         years_elapsed = year - self.start_year
     
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
         print(f"Years elapsed: {years_elapsed}")
     
-        # Apply emissions reduction from the previous year's abatement
+        # Adjust emissions intensity based on prior abatement
         if year > self.start_year:
             prior_emissions = self.facilities_data[f'Emissions_{year - 1}']
             prior_abatement = self.facilities_data[f'Tonnes Abated_{year - 1}']
             prior_output = self.facilities_data[f'Output_{year - 1}']
-    
-            # Calculate adjusted emissions intensity with abatement feedback
             emissions_intensity = (prior_emissions - prior_abatement) / prior_output
             emissions_intensity = emissions_intensity.clip(lower=0)  # Ensure non-negative intensity
         else:
-            # Use baseline emissions intensity for the first year
             emissions_intensity = (
                 self.facilities_data['Baseline Emissions'] /
                 self.facilities_data['Baseline Output']
             )
     
-        # Calculate benchmark with ratchet
+        # Calculate current and target surplus
+        total_allocations = self.facilities_data['Baseline Allocations'].sum()
+        target_surplus = 0.05 * total_allocations  # Target surplus is 5% of total allocations
+        if year > self.start_year:
+            current_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year - 1}'].clip(lower=0).sum()
+        else:
+            current_surplus = target_surplus  # Assume balanced in the first year
+    
+        # Compute required ratchet adjustment to maintain target surplus ratio
+        allocation_decline_rate = (total_allocations - target_surplus) / total_allocations
+        required_ratchet_rate = allocation_decline_rate / (1 + years_elapsed)  # Spread over time
+    
+        # Apply bounds to the computed ratchet rate
+        self.facilities_data['Benchmark Ratchet Rate'] = np.clip(
+            required_ratchet_rate, 0.01, 0.20  # Limit annual decline to 1-20%
+        )
+    
+        # Calculate benchmark with adjusted ratchet rate
         self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] * 
-            (1 + self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
+            self.facilities_data['Baseline Benchmark'] *
+            (1 - self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
         )
     
         # Calculate output with growth
         self.facilities_data[f'Output_{year}'] = (
-            self.facilities_data['Baseline Output'] * 
+            self.facilities_data['Baseline Output'] *
             (1 + self.facilities_data['Output Growth Rate']) ** years_elapsed
         )
     
@@ -119,31 +142,32 @@ class obamodel:
         self.facilities_data[f'Emissions_{year}'] = (
             self.facilities_data[f'Output_{year}'] * emissions_intensity
         )
+        self.facilities_data[f'Emissions_{year}'] = np.clip(
+            self.facilities_data[f'Emissions_{year}'], 0, None
+        )
     
         # Calculate allocations
         self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * 
+            self.facilities_data[f'Output_{year}'] *
             self.facilities_data[f'Benchmark_{year}']
+        )
+        self.facilities_data[f'Allocations_{year}'] = np.clip(
+            self.facilities_data[f'Allocations_{year}'], 0, None
         )
     
         # Calculate initial surplus/deficit
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
-            self.facilities_data[f'Allocations_{year}'] - 
+            self.facilities_data[f'Allocations_{year}'] -
             self.facilities_data[f'Emissions_{year}']
         )
     
         # Diagnostics
-        print("\nDiagnostics:")
-        print(f"  Average Emissions Intensity: {emissions_intensity.mean():.4f}")
-        print(f"  Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():,.2f}")
         print(f"  Total Allocations: {self.facilities_data[f'Allocations_{year}'].sum():,.2f}")
+        print(f"  Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():,.2f}")
         print(f"  Total Surplus/Deficit: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
-    
-        # Allocation diagnostics
-        print("\nAllocation Analysis:")
-        print(f"Baseline Allocations: {self.baseline_allocations.sum():,.2f}")
-        print(f"Current Allocations: {self.facilities_data[f'Allocations_{year}'].sum():,.2f}")
-        print(f"Allocation Change: {((self.facilities_data[f'Allocations_{year}'].sum() / self.baseline_allocations.sum() - 1) * 100):.1f}%")
+        print(f"  Adjusted Benchmark Ratchet Rate: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
+        print(f"  Adjusted Allocations Diagnostic: {self.facilities_data[f'Allocations_{year}'].describe()}")
+
 
     def calculate_dynamic_allowance_surplus_deficit(self, year: int) -> Tuple[float, float]:
         """Calculate supply and demand for a given year."""
@@ -162,26 +186,26 @@ class obamodel:
         return total_supply, total_demand
 
     def determine_market_price(self, supply: float, demand: float, year: int) -> float:
-        """Determine market price based on supply, demand, and MAC curve."""
-        MIN_PRICE = self.floor_price
-        MAX_PRICE = self.ceiling_price
-        
+        """Determine market price based on supply, demand, and exogenous price schedule."""
+        target_price = self.price_schedule.get(year, self.floor_price)
         remaining_demand = max(0, demand - supply)
+    
         if remaining_demand <= 0:
-            self.market_price = MIN_PRICE
+            self.market_price = target_price  # Default to exogenous price
             return self.market_price
-        
+    
         mac_curve = self._build_mac_curve(year)
         if not mac_curve:
-            self.market_price = MIN_PRICE
+            self.market_price = target_price
             return self.market_price
-        
+    
         # Adjust price dynamically based on remaining demand
         price_index = min(int(remaining_demand * 10), len(mac_curve) - 1)
-        self.market_price = min(max(mac_curve[price_index], MIN_PRICE), MAX_PRICE)
+        self.market_price = max(target_price, mac_curve[price_index])
     
-        print(f"Year {year} Market Price: ${self.market_price:.2f}")
+        print(f"Year {year} Market Price (Target: ${target_price:.2f}): ${self.market_price:.2f}")
         return self.market_price
+
 
 
     def _build_mac_curve(self, year: int) -> List[float]:
@@ -391,12 +415,12 @@ class obamodel:
             self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
         ).replace([float('inf'), -float('inf')], 0).fillna(0)
 
-    def run_model(self, start_year: int, end_year: int, output_file: str = "reshaped_combined_summary.csv") -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Run the complete model simulation for specified time period."""
+    def run_model(self, output_file: str = "reshaped_combined_summary.csv") -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Run the complete model simulation for the initialized time period."""
         print("Running emissions trading model...")
         market_summary = []
         
-        for year in range(start_year, end_year + 1):
+        for year in range(self.start_year, self.end_year + 1):
             print(f"\nProcessing year {year}...")
             
             # Market operations
@@ -412,16 +436,28 @@ class obamodel:
             # Collect market summary
             market_summary.append(self._create_market_summary(year))
             
+            # Diagnostics
+            print(f"Year {year} Results:")
+            print(f"  Target Market Price: ${self.price_schedule.get(year, self.floor_price):.2f}")
+            print(f"  Achieved Market Price: ${self.market_price:.2f}")
+            print(f"  Total Supply: {total_supply:.2f}")
+            print(f"  Total Demand: {total_demand:.2f}")
+            print(f"  Remaining Surplus: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum():,.2f}")
+            print(f"  Remaining Deficit: {abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum()):,.2f}")
+            print(f"  Average Benchmark Ratchet Rate: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
+            
             print(f"Year {year} complete.")
         
         # Create summary DataFrames
         market_summary_df = pd.DataFrame(market_summary)
-        facility_results = self._prepare_facility_results(start_year, end_year)
+        facility_results = self._prepare_facility_results(self.start_year, self.end_year)
         
         # Save results
         self.save_results(market_summary_df, facility_results, output_file)
         
         return market_summary_df, facility_results
+
+
 
     def _prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
         """Prepare facility results in long format."""
@@ -490,6 +526,23 @@ class obamodel:
             print(f"Facility-level Abatement: {facility_total_abatement}")
             print(f"Market-level Abatement: {market_total_abatement}")
     
+        # Calculate the emission-weighted average ratchet rate
+        weighted_ratchet_rate = (
+            (self.facilities_data['Baseline Emissions'] *
+             self.facilities_data['Benchmark Ratchet Rate']).sum() /
+            self.facilities_data['Baseline Emissions'].sum()
+        )
+    
+        #validate sum of allcoatiosn against expecations 
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        if total_allocations < 0 or np.isnan(total_allocations):
+            print(f"Warning: Total Allocations for Year {year} is invalid: {total_allocations}")
+
+        #bound ratchet rate 
+        self.facilities_data['Benchmark Ratchet Rate'] = np.clip(
+            self.facilities_data['Benchmark Ratchet Rate'], 0, 1
+)
+        
         # Return the market summary
         return {
             'Year': year,
@@ -505,6 +558,7 @@ class obamodel:
             'Average Cost to Profit Ratio': self.facilities_data[f'Cost to Profit Ratio_{year}'].mean(),
             'Average Cost to Output Ratio': self.facilities_data[f'Cost to Output Ratio_{year}'].mean(),
             'Remaining Surplus': self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum(),
-            'Remaining Deficit': abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
+            'Remaining Deficit': abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum()),
+            'Emission-Weighted Ratchet Rate': weighted_ratchet_rate
         }
 
