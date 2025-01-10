@@ -3,77 +3,65 @@ import os
 from obamodel import obamodel  # Import the updated obamodel class
 
 # Set the working directory
-os.chdir(r"C:\Users\user\AppData\Local\Programs\Python\Python313\OBA_test")
+os.chdir(r"C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python313\\OBA_test")
 print("Current working directory:", os.getcwd())
 
 # Load input data
-facilities_data = pd.read_csv("facilities_data.csv")
-abatement_cost_curve = pd.read_csv("abatement_cost_curve.csv")
+try:
+    facilities_data = pd.read_csv("facilities_data.csv")
+    abatement_cost_curve = pd.read_csv("abatement_cost_curve.csv")
+    print("Data loaded successfully:")
+    print(f"Number of facilities: {len(facilities_data)}")
+    print(f"Number of abatement curves: {len(abatement_cost_curve)}")
+except FileNotFoundError as e:
+    print(f"Error loading data: {e}")
+    exit(1)
 
-# Initialize the emissions trading model
+# Load scenario data
+scenario_file = "scenarios.csv"
+scenario_name = "Baseline"  # Replace with the desired scenario name
+try:
+    scenario_params = obamodel.load_scenario(scenario_file, scenario_name)
+    print(f"Scenario '{scenario_name}' loaded successfully.")
+except Exception as e:
+    print(f"Error loading scenario: {e}")
+    exit(1)
+
+# Initialize the emissions trading model with scenario parameters
 start_year = 2025
-model = obamodel(facilities_data, abatement_cost_curve, start_year)  # Include start_year
+end_year = 2035
+try:
+    model = obamodel(facilities_data, abatement_cost_curve, start_year, end_year, scenario_params)
+except Exception as e:
+    print(f"Error initializing model: {e}")
+    exit(1)
 
 # Run the emissions trading model
-def run_trading_model(start_year=2025, end_year=2035):
+def run_trading_model():
     print("Running the model...")
 
-    # Execute the model's main functionality for multi-year dynamics
     try:
-        results = model.run_model(start_year, end_year)
-    except KeyError as e:
-        print(f"KeyError encountered during model run: {e}")
-        return
+        # Execute the model
+        market_summary, facilities_results = model.run_model(output_file="facility_results.csv")
+
+        # Save market summary
+        market_summary_file = "market_summary.csv"
+        market_summary.to_csv(market_summary_file, index=False)
+        print(f"Market summary saved to {market_summary_file}")
+
+        # Save annual facility summary
+        facility_summary_file = "annual_facility_summary.csv"
+        facilities_results.to_csv(facility_summary_file, index=False)
+        print(f"Annual facility summary saved to {facility_summary_file}")
+
+        # Debug outputs
+        print("Market Summary Preview:")
+        print(market_summary.head())
+        print("Facility Summary Preview:")
+        print(facilities_results.head())
+
     except Exception as e:
-        print(f"Unexpected error during model run: {e}")
-        return
-
-    if not results:  # Handle case where results are None or empty
-        print("No results were generated. Please check the model configuration and input data.")
-        return
-
-    # Initialize lists to collect yearly summaries for combined files
-    combined_market_results = []
-    combined_facility_results = []
-
-    # Process and save results for each year
-    for result in results:
-        year = result['Year']
-        market_summary_file = f"market_summary_{year}.csv"
-        facility_summary_file = f"facility_summary_{year}.csv"
-
-        # Save market-level summaries to individual files
-        pd.DataFrame([result]).to_csv(market_summary_file, index=False)
-        print(f"Year {year} Market-level summary saved to {market_summary_file}")
-
-        # Extract year-specific facility data
-        facility_summary = model.facilities_data[[
-            'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
-            f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
-            f'Trade Cost_{year}', f'Total Cost_{year}', f'Profit_{year}',
-            f'Costs to Profits Ratio_{year}', f'Costs to Output Ratio_{year}',
-            'Banked Allowances'  # Add Banked Allowances to the summary
-        ]].copy()
-
-        facility_summary["Year"] = year
-
-        # Save facility-level summaries for the year
-        facility_summary.to_csv(facility_summary_file, index=False)
-        print(f"Year {year} Facility-level summary saved to {facility_summary_file}")
-
-        # Append results to combined lists
-        combined_market_results.append(result)
-        combined_facility_results.append(facility_summary)
-
-    # Save combined market-level results to a single file
-    combined_market_file = "combined_market_summary.csv"
-    pd.DataFrame(combined_market_results).to_csv(combined_market_file, index=False)
-    print(f"Combined market-level summary saved to {combined_market_file}")
-
-    # Save combined facility-level results to a single file
-    combined_facility_file = "combined_facility_summary.csv"
-    pd.concat(combined_facility_results).to_csv(combined_facility_file, index=False)
-    print(f"Combined facility-level summary saved to {combined_facility_file}")
+        print(f"Error during model run: {e}")
 
 # Execute the function
 if __name__ == "__main__":
