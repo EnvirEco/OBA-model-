@@ -4,23 +4,41 @@ from typing import Tuple, Dict, List
 
 class obamodel:
     # 1. Initialization and Setup
-    @staticmethod
+   @staticmethod
     def load_all_scenarios(scenario_file: str) -> List[Dict]:
-        """Load all scenario configurations from a CSV file."""
+        """Load and validate scenarios from CSV file."""
         print(f"Loading scenarios from file: {scenario_file}")
         try:
             scenarios = pd.read_csv(scenario_file)
-            print("Scenario file loaded successfully.")
             
-            # Strip and clean column headers
+            # Clean column names
             scenarios.columns = scenarios.columns.str.strip()
-            print("Columns in the file:", scenarios.columns.tolist())
             
-            # Ensure 'Scenario' column exists
-            if 'Scenario' not in scenarios.columns:
-                raise ValueError("Column 'Scenario' is missing from the scenario file.")
+            # Define required parameters and their bounds
+            param_bounds = {
+                'Floor Price': (0, None),
+                'Ceiling Price': (0, None),
+                'Price Increment': (0, None),
+                'Output Growth Rate': (-0.5, 0.5),
+                'Emissions Growth Rate': (-0.5, 0.5),
+                'Benchmark Ratchet Rate': (0, 1)
+            }
             
-            # Convert each scenario row into a dictionary
+            # Validate parameters
+            missing_params = set(param_bounds.keys()) - set(scenarios.columns)
+            if missing_params:
+                raise ValueError(f"Missing required parameters: {missing_params}")
+            
+            # Validate ranges
+            for param, (min_val, max_val) in param_bounds.items():
+                if min_val is not None and (scenarios[param] < min_val).any():
+                    bad_values = scenarios[scenarios[param] < min_val][[param, 'Scenario']]
+                    raise ValueError(f"{param} contains values below {min_val}:\n{bad_values}")
+                if max_val is not None and (scenarios[param] > max_val).any():
+                    bad_values = scenarios[scenarios[param] > max_val][[param, 'Scenario']]
+                    raise ValueError(f"{param} contains values above {max_val}:\n{bad_values}")
+            
+            # Convert to list of dictionaries
             scenario_list = []
             for _, row in scenarios.iterrows():
                 scenario_list.append({
@@ -30,16 +48,15 @@ class obamodel:
                     "price_increment": row["Price Increment"],
                     "output_growth_rate": row["Output Growth Rate"],
                     "emissions_growth_rate": row["Emissions Growth Rate"],
-                    "benchmark_ratchet_rate": row["Benchmark Ratchet Rate"],
-                    "max_reduction": row["Max Reduction"]
+                    "benchmark_ratchet_rate": row["Benchmark Ratchet Rate"]
                 })
             
-            print(f"Loaded {len(scenario_list)} scenarios successfully.")
+            print(f"Successfully loaded {len(scenario_list)} scenarios")
             return scenario_list
+            
         except Exception as e:
             print(f"Error loading scenarios: {e}")
             raise
-
        
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
                  start_year: int, end_year: int, scenario_params: Dict):
@@ -583,6 +600,60 @@ class obamodel:
             facility_results.to_csv(f"{output_dir}/{scenario_name}_facility_results.csv", index=False)
             print(f"Results for '{scenario['name']}' saved in {output_dir}/")
     
+    def process_scenario_results(output_dir: str) -> pd.DataFrame:
+        """Process and summarize results from all scenarios."""
+        import os
+        
+        summaries = []
+        summary_files = [f for f in os.listdir(output_dir) if f.endswith('_market_summary.csv')]
+        
+        print(f"Processing results from {len(summary_files)} scenarios...")
+        
+        for summary_file in summary_files:
+            scenario_name = summary_file.split('_market_summary.csv')[0]
+            file_path = os.path.join(output_dir, summary_file)
+            
+            try:
+                data = pd.read_csv(file_path)
+                
+                # Calculate key metrics
+                summary = {
+                    'Scenario': scenario_name,
+                    'Average Price': data['Market Price'].mean(),
+                    'Final Price': data['Market Price'].iloc[-1],
+                    'Total Abatement': data['Total Abatement'].sum(),
+                    'Cumulative Emissions': data['Total Emissions'].sum(),
+                    'Final Year Emissions': data['Total Emissions'].iloc[-1],
+                    'Total Compliance Cost': data['Total Compliance Cost'].sum(),
+                    'Average Ratchet Rate': data['Emission-Weighted Ratchet Rate'].mean()
+                }
+                
+                # Calculate year-over-year changes
+                summary.update({
+                    'Emissions Reduction Rate': (
+                        (data['Total Emissions'].iloc[-1] / data['Total Emissions'].iloc[0]) 
+                        ** (1/len(data)) - 1
+                    ),
+                    'Price Growth Rate': (
+                        (data['Market Price'].iloc[-1] / data['Market Price'].iloc[0]) 
+                        ** (1/len(data)) - 1
+                    )
+                })
+                
+                summaries.append(summary)
+                
+            except Exception as e:
+                print(f"Error processing scenario {scenario_name}: {e}")
+        
+        results = pd.DataFrame(summaries)
+        
+        # Save combined results
+        output_file = os.path.join(output_dir, 'scenario_comparison.csv')
+        results.to_csv(output_file, index=False)
+        print(f"Scenario comparison saved to: {output_file}")
+        
+        return results
+        
     def _create_market_summary(self, year: int) -> Dict:
         """Create market summary dictionary for a specific year."""
         # Calculate total abatement from facilities
