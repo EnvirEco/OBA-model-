@@ -4,7 +4,7 @@ from typing import Tuple, Dict, List
 
 class obamodel:
     # 1. Initialization and Setup
-   @staticmethod
+    @staticmethod
     def load_all_scenarios(scenario_file: str) -> List[Dict]:
         """Load and validate scenarios from CSV file."""
         print(f"Loading scenarios from file: {scenario_file}")
@@ -569,36 +569,72 @@ class obamodel:
     # 5. Scenario Analysis
     
     def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
-                          abatement_cost_curve: pd.DataFrame, start_year: int, end_year: int, output_dir: str = "scenario_results") -> None:
-        """Run the model for all scenarios and save results."""
+                         abatement_cost_curve: pd.DataFrame, start_year: int, 
+                         end_year: int, output_dir: str = "scenario_results") -> None:
+        """Run model for all scenarios with enhanced tracking."""
         import os
         
-        # Load all scenarios
+        # Load and validate scenarios
         scenarios = self.load_all_scenarios(scenario_file)
         
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Track scenario parameters
+        scenario_params = []
         
         for scenario in scenarios:
-            print(f"\nRunning Scenario: {scenario['name']}")
-            
-            # Initialize model for the current scenario
-            model = obamodel(
-                facilities_data=facilities_data,
-                abatement_cost_curve=abatement_cost_curve,
-                start_year=start_year,
-                end_year=end_year,
-                scenario_params=scenario
-            )
-            
-            # Run the model and save results
-            market_summary, facility_results = model.run_model()
-            
-            # Save scenario-specific results
             scenario_name = scenario["name"].replace(" ", "_").lower()
-            market_summary.to_csv(f"{output_dir}/{scenario_name}_market_summary.csv", index=False)
-            facility_results.to_csv(f"{output_dir}/{scenario_name}_facility_results.csv", index=False)
-            print(f"Results for '{scenario['name']}' saved in {output_dir}/")
+            print(f"\n{'='*20} Running Scenario: {scenario['name']} {'='*20}")
+            
+            try:
+                # Track parameters
+                scenario_params.append({
+                    'Scenario': scenario['name'],
+                    **{k: v for k, v in scenario.items() if k != 'name'}
+                })
+                
+                # Initialize and run model
+                model = obamodel(
+                    facilities_data=facilities_data.copy(),
+                    abatement_cost_curve=abatement_cost_curve.copy(),
+                    start_year=start_year,
+                    end_year=end_year,
+                    scenario_params=scenario
+                )
+                
+                # Run model and save results
+                market_summary, facility_results = model.run_model()
+                
+                # Add scenario identifier
+                market_summary['Scenario'] = scenario['name']
+                facility_results['Scenario'] = scenario['name']
+                
+                # Save scenario results
+                market_summary.to_csv(
+                    f"{output_dir}/{scenario_name}_market_summary.csv", 
+                    index=False
+                )
+                facility_results.to_csv(
+                    f"{output_dir}/{scenario_name}_facility_results.csv", 
+                    index=False
+                )
+                
+                print(f"Results saved for scenario: {scenario['name']}")
+                
+            except Exception as e:
+                print(f"Error in scenario {scenario['name']}: {e}")
+                continue
+        
+        # Save scenario parameters
+        pd.DataFrame(scenario_params).to_csv(
+            f"{output_dir}/scenario_parameters.csv", 
+            index=False
+        )
+        
+        # Process and summarize results
+        results_summary = process_scenario_results(output_dir)
+        print("\nScenario processing complete.")
     
     def process_scenario_results(output_dir: str) -> pd.DataFrame:
         """Process and summarize results from all scenarios."""
