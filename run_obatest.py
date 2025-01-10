@@ -1,68 +1,32 @@
 import pandas as pd
-import os
-from obamodel import obamodel  # Import the updated obamodel class
+from obamodel import obamodel
 
-# Set the working directory
-os.chdir(r"C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python313\\OBA_test")
-print("Current working directory:", os.getcwd())
+# Paths to input data and scenarios
+facilities_data_file = "facilities_data.csv"
+abatement_cost_curve_file = "abatement_cost_curve.csv"
+scenario_file = "scenarios.csv"
+output_dir = "scenario_results"
 
 # Load input data
-try:
-    facilities_data = pd.read_csv("facilities_data.csv")
-    abatement_cost_curve = pd.read_csv("abatement_cost_curve.csv")
-    print("Data loaded successfully:")
-    print(f"Number of facilities: {len(facilities_data)}")
-    print(f"Number of abatement curves: {len(abatement_cost_curve)}")
-except FileNotFoundError as e:
-    print(f"Error loading data: {e}")
-    exit(1)
+facilities_data = pd.read_csv(facilities_data_file)
+abatement_cost_curve = pd.read_csv(abatement_cost_curve_file)
 
-# Load scenario data
-scenario_file = "scenarios.csv"
-scenario_name = "Baseline"  # Replace with the desired scenario name
-try:
-    scenario_params = obamodel.load_scenario(scenario_file, scenario_name)
-    print(f"Scenario '{scenario_name}' loaded successfully.")
-except Exception as e:
-    print(f"Error loading scenario: {e}")
-    exit(1)
-
-# Initialize the emissions trading model with scenario parameters
+# Model parameters
 start_year = 2025
 end_year = 2035
+
+# Run all scenarios
+print("Starting scenario analysis...")
 try:
-    model = obamodel(facilities_data, abatement_cost_curve, start_year, end_year, scenario_params)
+    obamodel().run_all_scenarios(
+        scenario_file=scenario_file,
+        facilities_data=facilities_data,
+        abatement_cost_curve=abatement_cost_curve,
+        start_year=start_year,
+        end_year=end_year,
+        output_dir=output_dir
+    )
+    print("Scenario analysis completed successfully. Results saved to:", output_dir)
 except Exception as e:
-    print(f"Error initializing model: {e}")
-    exit(1)
+    print("Error during scenario analysis:", e)
 
-# Run the emissions trading model
-def run_trading_model():
-    print("Running the model...")
-
-    try:
-        # Execute the model
-        market_summary, facilities_results = model.run_model(output_file="facility_results.csv")
-
-        # Save market summary
-        market_summary_file = "market_summary.csv"
-        market_summary.to_csv(market_summary_file, index=False)
-        print(f"Market summary saved to {market_summary_file}")
-
-        # Save annual facility summary
-        facility_summary_file = "annual_facility_summary.csv"
-        facilities_results.to_csv(facility_summary_file, index=False)
-        print(f"Annual facility summary saved to {facility_summary_file}")
-
-        # Debug outputs
-        print("Market Summary Preview:")
-        print(market_summary.head())
-        print("Facility Summary Preview:")
-        print(facilities_results.head())
-
-    except Exception as e:
-        print(f"Error during model run: {e}")
-
-# Execute the function
-if __name__ == "__main__":
-    run_trading_model()
