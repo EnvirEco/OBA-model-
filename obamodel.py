@@ -5,9 +5,9 @@ from typing import Tuple, Dict, List
 class obamodel:
     # 1. Initialization and Setup
     @staticmethod
-    def load_scenario(scenario_file: str, scenario_name: str) -> Dict:
-        """Load scenario configuration from a CSV file."""
-        print(f"Loading scenario from file: {scenario_file}")
+    def load_all_scenarios(scenario_file: str) -> List[Dict]:
+        """Load all scenario configurations from a CSV file."""
+        print(f"Loading scenarios from file: {scenario_file}")
         try:
             scenarios = pd.read_csv(scenario_file)
             print("Scenario file loaded successfully.")
@@ -20,36 +20,26 @@ class obamodel:
             if 'Scenario' not in scenarios.columns:
                 raise ValueError("Column 'Scenario' is missing from the scenario file.")
             
-            # Find the matching scenario
-            scenario = scenarios[scenarios['Scenario'] == scenario_name]
-            if scenario.empty:
-                raise ValueError(f"Scenario '{scenario_name}' not found in {scenario_file}.")
+            # Convert each scenario row into a dictionary
+            scenario_list = []
+            for _, row in scenarios.iterrows():
+                scenario_list.append({
+                    "name": row["Scenario"],
+                    "floor_price": row["Floor Price"],
+                    "ceiling_price": row["Ceiling Price"],
+                    "price_increment": row["Price Increment"],
+                    "output_growth_rate": row["Output Growth Rate"],
+                    "emissions_growth_rate": row["Emissions Growth Rate"],
+                    "benchmark_ratchet_rate": row["Benchmark Ratchet Rate"],
+                    "max_reduction": row["Max Reduction"]
+                })
             
-            scenario_row = scenario.iloc[0]  # Get the first (and expected only) matching row
-            
-            # Check for missing required columns
-            required_columns = [
-                "Floor Price", "Ceiling Price", "Price Increment",
-                "Output Growth Rate", "Emissions Growth Rate",
-                "Benchmark Ratchet Rate", "Max Reduction"
-            ]
-            missing_columns = [col for col in required_columns if col not in scenarios.columns]
-            if missing_columns:
-                raise ValueError(f"Missing required columns in scenario file: {missing_columns}")
-            
-            print(f"Scenario '{scenario_name}' loaded successfully.")
-            return {
-                "floor_price": scenario_row["Floor Price"],
-                "ceiling_price": scenario_row["Ceiling Price"],
-                "price_increment": scenario_row["Price Increment"],
-                "output_growth_rate": scenario_row["Output Growth Rate"],
-                "emissions_growth_rate": scenario_row["Emissions Growth Rate"],
-                "benchmark_ratchet_rate": scenario_row["Benchmark Ratchet Rate"],
-                "max_reduction": scenario_row["Max Reduction"]
-            }
+            print(f"Loaded {len(scenario_list)} scenarios successfully.")
+            return scenario_list
         except Exception as e:
-            print(f"Error loading scenario: {e}")
+            print(f"Error loading scenarios: {e}")
             raise
+
        
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
                  start_year: int, end_year: int, scenario_params: Dict):
@@ -561,6 +551,38 @@ class obamodel:
  
     # 5. Scenario Analysis
     
+    def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
+                          abatement_cost_curve: pd.DataFrame, start_year: int, end_year: int, output_dir: str = "scenario_results") -> None:
+        """Run the model for all scenarios and save results."""
+        import os
+        
+        # Load all scenarios
+        scenarios = self.load_all_scenarios(scenario_file)
+        
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        for scenario in scenarios:
+            print(f"\nRunning Scenario: {scenario['name']}")
+            
+            # Initialize model for the current scenario
+            model = obamodel(
+                facilities_data=facilities_data,
+                abatement_cost_curve=abatement_cost_curve,
+                start_year=start_year,
+                end_year=end_year,
+                scenario_params=scenario
+            )
+            
+            # Run the model and save results
+            market_summary, facility_results = model.run_model()
+            
+            # Save scenario-specific results
+            scenario_name = scenario["name"].replace(" ", "_").lower()
+            market_summary.to_csv(f"{output_dir}/{scenario_name}_market_summary.csv", index=False)
+            facility_results.to_csv(f"{output_dir}/{scenario_name}_facility_results.csv", index=False)
+            print(f"Results for '{scenario['name']}' saved in {output_dir}/")
+    
     def _create_market_summary(self, year: int) -> Dict:
         """Create market summary dictionary for a specific year."""
         # Calculate total abatement from facilities
@@ -613,3 +635,5 @@ class obamodel:
             'Remaining Deficit': abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum()),
             'Emission-Weighted Ratchet Rate': weighted_ratchet_rate
         }
+
+   
