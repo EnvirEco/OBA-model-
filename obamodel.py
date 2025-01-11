@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import os
 from typing import Tuple, Dict, List
 
 class obamodel:
@@ -191,6 +192,17 @@ class obamodel:
             self.facilities_data['Baseline Benchmark'] *
             (1 - self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
         )
+
+        print("\nBenchmark Calculations:")
+        print(f"  Average Baseline Benchmark: {self.facilities_data['Baseline Benchmark'].mean():.4f}")
+        print(f"  Average Current Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():.4f}")
+        print(f"  Ratchet Rate Applied: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
+        
+        # Track actual ratchet rate applied
+        self.facilities_data[f'Applied_Ratchet_Rate_{year}'] = (
+            1 - (self.facilities_data[f'Benchmark_{year}'] / 
+                 self.facilities_data['Baseline Benchmark'])
+        ) ** (1 / max(1, years_elapsed))
     
         # Calculate output with growth
         self.facilities_data[f'Output_{year}'] = (
@@ -355,26 +367,23 @@ class obamodel:
         print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
 
     def trade_allowances(self, year: int) -> None:
-        """Execute allowance trades between facilities."""
+        """Execute trades with profit-maximizing behavior."""
         print(f"\n=== Trading Analysis for Year {year} ===")
         
-        # Pre-trade analysis
-        pre_trade = self.analyze_market_positions(year)
+        # Identify buyers and sellers after abatement
+        buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
+        sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
         
-        if self.market_price <= 0:
-            print(f"Warning: Invalid market price (${self.market_price:,.2f})")
-            return
-    
-        buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0].copy()
-        sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0].copy()
+        print(f"Pre-trade positions:")
+        print(f"Buyers: {len(buyers)}, Total Demand: {abs(buyers[f'Allowance Surplus/Deficit_{year}'].sum()):.2f}")
+        print(f"Sellers: {len(sellers)}, Total Supply: {sellers[f'Allowance Surplus/Deficit_{year}'].sum():.2f}")
         
-        if buyers.empty or sellers.empty:
-            print("No valid trading pairs found")
-            return
-    
         trades_executed = []
         for buyer_idx, buyer in buyers.iterrows():
             deficit = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
+            
+            # Sort sellers by increasing costs to ensure efficient trading
+            sellers = sellers.sort_values(by=f'Abatement Cost_{year}', ascending=True)
             
             for seller_idx, seller in sellers.iterrows():
                 surplus = seller[f'Allowance Surplus/Deficit_{year}']
@@ -390,19 +399,11 @@ class obamodel:
                         'Price': self.market_price,
                         'Total Cost': trade_cost
                     })
-                    deficit -= trade_volume
                     
+                    deficit -= trade_volume
                     if deficit <= 0:
                         break
-        
-        if trades_executed:
-            trades_df = pd.DataFrame(trades_executed)
-            print("\nTrades Executed:")
-            print(trades_df.to_string())
-            print(f"\nTotal Trade Volume: {trades_df['Volume'].sum():,.2f}")
-        else:
-            print("No trades were executed")
-          
+
     def _update_trade_positions(self, buyer_idx: int, seller_idx: int, 
                               trade_volume: float, trade_cost: float, year: int) -> None:
         """Update positions after a trade."""
@@ -411,40 +412,39 @@ class obamodel:
         self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += trade_cost
         self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += trade_volume
         self.facilities_data.at[buyer_idx, f'Allowance Purchase Cost_{year}'] += trade_cost
-
+    
         # Update seller
         self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] -= trade_volume
         self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= trade_cost
         self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
         self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += trade_cost
-
-    
-    def analyze_market_positions(self, year: int) -> pd.DataFrame:
-        """Add detailed diagnostic logging for market positions."""
-        print(f"\n=== Market Position Analysis for Year {year} ===")
         
-        positions = self.facilities_data[[
-            'Facility ID',
-            f'Allocations_{year}',
-            f'Emissions_{year}',
-            f'Allowance Surplus/Deficit_{year}'
-        ]].copy()
-        
-        print("\nAllocation Statistics:")
-        print(f"Total Allocations: {positions[f'Allocations_{year}'].sum():,.2f}")
-        print(f"Total Emissions: {positions[f'Emissions_{year}'].sum():,.2f}")
-        print(f"Net Position: {positions[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
-        
-        # Count buyers and sellers
-        buyers = positions[positions[f'Allowance Surplus/Deficit_{year}'] < 0]
-        sellers = positions[positions[f'Allowance Surplus/Deficit_{year}'] > 0]
-        
-        print(f"\nNumber of Buyers: {len(buyers)}")
-        print(f"Total Deficit: {abs(buyers[f'Allowance Surplus/Deficit_{year}'].sum()):,.2f}")
-        print(f"Number of Sellers: {len(sellers)}")
-        print(f"Total Surplus: {sellers[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
-        
-        return positions
+        def analyze_market_positions(self, year: int) -> pd.DataFrame:
+            """Add detailed diagnostic logging for market positions."""
+            print(f"\n=== Market Position Analysis for Year {year} ===")
+            
+            positions = self.facilities_data[[
+                'Facility ID',
+                f'Allocations_{year}',
+                f'Emissions_{year}',
+                f'Allowance Surplus/Deficit_{year}'
+            ]].copy()
+            
+            print("\nAllocation Statistics:")
+            print(f"Total Allocations: {positions[f'Allocations_{year}'].sum():,.2f}")
+            print(f"Total Emissions: {positions[f'Emissions_{year}'].sum():,.2f}")
+            print(f"Net Position: {positions[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
+            
+            # Count buyers and sellers
+            buyers = positions[positions[f'Allowance Surplus/Deficit_{year}'] < 0]
+            sellers = positions[positions[f'Allowance Surplus/Deficit_{year}'] > 0]
+            
+            print(f"\nNumber of Buyers: {len(buyers)}")
+            print(f"Total Deficit: {abs(buyers[f'Allowance Surplus/Deficit_{year}'].sum()):,.2f}")
+            print(f"Number of Sellers: {len(sellers)}")
+            print(f"Total Surplus: {sellers[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
+            
+            return positions
         
     # 3. Cost and Performance Calculations
     def calculate_costs(self, year: int) -> None:
@@ -571,7 +571,7 @@ class obamodel:
     def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
                          abatement_cost_curve: pd.DataFrame, start_year: int, 
                          end_year: int, output_dir: str = "scenario_results") -> None:
-        """Run model for all scenarios with enhanced tracking."""
+        """Run model for all scenarios with proper result handling."""
         import os
         
         # Load and validate scenarios
@@ -580,21 +580,15 @@ class obamodel:
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
         
-        # Track scenario parameters
-        scenario_params = []
+        # Track scenario results
+        scenario_results = []
         
         for scenario in scenarios:
             scenario_name = scenario["name"].replace(" ", "_").lower()
-            print(f"\n{'='*20} Running Scenario: {scenario['name']} {'='*20}")
+            print(f"\nRunning Scenario: {scenario['name']}")
             
             try:
-                # Track parameters
-                scenario_params.append({
-                    'Scenario': scenario['name'],
-                    **{k: v for k, v in scenario.items() if k != 'name'}
-                })
-                
-                # Initialize and run model
+                # Initialize and run model for this scenario
                 model = obamodel(
                     facilities_data=facilities_data.copy(),
                     abatement_cost_curve=abatement_cost_curve.copy(),
@@ -603,7 +597,7 @@ class obamodel:
                     scenario_params=scenario
                 )
                 
-                # Run model and save results
+                # Run model
                 market_summary, facility_results = model.run_model()
                 
                 # Add scenario identifier
@@ -612,13 +606,20 @@ class obamodel:
                 
                 # Save scenario results
                 market_summary.to_csv(
-                    f"{output_dir}/{scenario_name}_market_summary.csv", 
+                    os.path.join(output_dir, f"{scenario_name}_market_summary.csv"), 
                     index=False
                 )
                 facility_results.to_csv(
-                    f"{output_dir}/{scenario_name}_facility_results.csv", 
+                    os.path.join(output_dir, f"{scenario_name}_facility_results.csv"), 
                     index=False
                 )
+                
+                # Store results for comparison
+                scenario_results.append({
+                    'name': scenario['name'],
+                    'market_summary': market_summary,
+                    'facility_results': facility_results
+                })
                 
                 print(f"Results saved for scenario: {scenario['name']}")
                 
@@ -626,20 +627,31 @@ class obamodel:
                 print(f"Error in scenario {scenario['name']}: {e}")
                 continue
         
-        # Save scenario parameters
-        pd.DataFrame(scenario_params).to_csv(
-            f"{output_dir}/scenario_parameters.csv", 
-            index=False
-        )
-        
-        # Process and summarize results
-        results_summary = process_scenario_results(output_dir)
-        print("\nScenario processing complete.")
+        # Create summary comparison
+        self._save_scenario_comparison(scenario_results, output_dir)
+        print("\nScenario analysis complete.")
     
-    def process_scenario_results(output_dir: str) -> pd.DataFrame:
-        """Process and summarize results from all scenarios."""
-        import os
+    def _save_scenario_comparison(self, scenario_results: List[Dict], output_dir: str) -> None:
+        """Create and save scenario comparison."""
+        comparisons = []
         
+        for result in scenario_results:
+            summary = result['market_summary']
+            comparisons.append({
+                'Scenario': result['name'],
+                'Average Price': summary['Market Price'].mean(),
+                'Total Abatement': summary['Total Abatement'].sum(),
+                'Total Emissions': summary['Total Emissions'].sum(),
+                'Total Cost': summary['Total Compliance Cost'].sum(),
+                'Final Year Emissions': summary['Total Emissions'].iloc[-1]
+            })
+        
+        # Save comparison
+        comparison_df = pd.DataFrame(comparisons)
+        comparison_df.to_csv(os.path.join(output_dir, 'scenario_comparison.csv'), index=False)
+
+    def process_scenario_results(self, output_dir: str) -> pd.DataFrame:
+        """Process and summarize results from all scenarios."""
         summaries = []
         summary_files = [f for f in os.listdir(output_dir) if f.endswith('_market_summary.csv')]
         
@@ -651,8 +663,6 @@ class obamodel:
             
             try:
                 data = pd.read_csv(file_path)
-                
-                # Calculate key metrics
                 summary = {
                     'Scenario': scenario_name,
                     'Average Price': data['Market Price'].mean(),
@@ -663,31 +673,12 @@ class obamodel:
                     'Total Compliance Cost': data['Total Compliance Cost'].sum(),
                     'Average Ratchet Rate': data['Emission-Weighted Ratchet Rate'].mean()
                 }
-                
-                # Calculate year-over-year changes
-                summary.update({
-                    'Emissions Reduction Rate': (
-                        (data['Total Emissions'].iloc[-1] / data['Total Emissions'].iloc[0]) 
-                        ** (1/len(data)) - 1
-                    ),
-                    'Price Growth Rate': (
-                        (data['Market Price'].iloc[-1] / data['Market Price'].iloc[0]) 
-                        ** (1/len(data)) - 1
-                    )
-                })
-                
                 summaries.append(summary)
                 
             except Exception as e:
                 print(f"Error processing scenario {scenario_name}: {e}")
         
         results = pd.DataFrame(summaries)
-        
-        # Save combined results
-        output_file = os.path.join(output_dir, 'scenario_comparison.csv')
-        results.to_csv(output_file, index=False)
-        print(f"Scenario comparison saved to: {output_file}")
-        
         return results
         
     def _create_market_summary(self, year: int) -> Dict:
@@ -707,6 +698,13 @@ class obamodel:
             print(f"Facility-level Abatement: {facility_total_abatement}")
             print(f"Market-level Abatement: {market_total_abatement}")
     
+        # Calculate scenario-specific ratchet rate
+        current_ratchet = self.facilities_data[f'Applied_Ratchet_Rate_{year}']
+        weighted_ratchet_rate = (
+            (self.facilities_data['Baseline Emissions'] * current_ratchet).sum() /
+            self.facilities_data['Baseline Emissions'].sum()
+        )
+        
         # Calculate the emission-weighted average ratchet rate
         weighted_ratchet_rate = (
             (self.facilities_data['Baseline Emissions'] *
