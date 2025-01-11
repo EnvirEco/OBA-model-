@@ -157,20 +157,8 @@ class obamodel:
         
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
         print(f"Years elapsed: {years_elapsed}")
-        
-        # Calculate initial benchmark with current ratchet rate
-        self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] *
-            (1 - self.benchmark_ratchet_rate) ** years_elapsed
-        )
-        
-        # Calculate output with growth
-        self.facilities_data[f'Output_{year}'] = (
-            self.facilities_data['Baseline Output'] *
-            (1 + self.output_growth_rate) ** years_elapsed
-        )
-        
-        # Calculate emissions with abatement effects
+    
+        # First calculate emissions to know target
         if year > self.start_year:
             prior_emissions = self.facilities_data[f'Emissions_{year - 1}']
             prior_abatement = self.facilities_data[f'Tonnes Abated_{year - 1}']
@@ -182,47 +170,49 @@ class obamodel:
                 self.facilities_data['Baseline Output']
             )
         
+        # Calculate output growth
+        self.facilities_data[f'Output_{year}'] = (
+            self.facilities_data['Baseline Output'] *
+            (1 + self.output_growth_rate) ** years_elapsed
+        )
+        
+        # Calculate emissions
         self.facilities_data[f'Emissions_{year}'] = (
             self.facilities_data[f'Output_{year}'] * 
             emissions_intensity
         ).clip(lower=0)
         
-        # Calculate allocations
+        # Calculate required allocations to meet surplus constraint
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        target_allocations = total_emissions / (1 - self.target_surplus_ratio)  # This ensures surplus = 10% of allocations
+        
+        # Back out required benchmark to achieve target allocations
+        total_output = self.facilities_data[f'Output_{year}'].sum()
+        required_benchmark = target_allocations / total_output
+        
+        # Calculate implied ratchet rate
+        baseline_benchmark = self.facilities_data['Baseline Benchmark'].mean()
+        implied_ratchet = 1 - (required_benchmark / baseline_benchmark) ** (1 / years_elapsed) if years_elapsed > 0 else 0
+        
+        # Update benchmark and allocations
+        self.facilities_data[f'Benchmark_{year}'] = required_benchmark
         self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] *
-            self.facilities_data[f'Benchmark_{year}']
+            self.facilities_data[f'Output_{year}'] * required_benchmark
         )
         
-        # Check surplus constraint
-        current_surplus = self.facilities_data[f'Allocations_{year}'].sum() - self.facilities_data[f'Emissions_{year}'].sum()
-        target_surplus = self.target_surplus_ratio * self.facilities_data[f'Allocations_{year}'].sum()
-        
-        if current_surplus < target_surplus:
-            # Adjust benchmark ratchet rate to maintain minimum surplus
-            adjustment = (target_surplus - current_surplus) / (self.facilities_data[f'Output_{year}'].sum() * self.facilities_data[f'Benchmark_{year}'].mean())
-            self.benchmark_ratchet_rate = max(0, self.benchmark_ratchet_rate - adjustment)
-            
-            # Recalculate benchmark and allocations with adjusted rate
-            self.facilities_data[f'Benchmark_{year}'] = (
-                self.facilities_data['Baseline Benchmark'] *
-                (1 - self.benchmark_ratchet_rate) ** years_elapsed
-            )
-            
-            self.facilities_data[f'Allocations_{year}'] = (
-                self.facilities_data[f'Output_{year}'] *
-                self.facilities_data[f'Benchmark_{year}']
-            )
-        
-        # Calculate final positions
+        # Calculate positions
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
             self.facilities_data[f'Allocations_{year}'] -
             self.facilities_data[f'Emissions_{year}']
         )
         
-        print("\nKey Metrics:")
-        print(f"Benchmark Ratchet Rate: {self.benchmark_ratchet_rate:.4f}")
-        print(f"Current Surplus: {current_surplus:.2f}")
-        print(f"Target Surplus: {target_surplus:.2f}")
+        print("\nConstraint Check:")
+        print(f"Total Emissions: {total_emissions:.2f}")
+        print(f"Total Allocations: {target_allocations:.2f}")
+        print(f"Required Benchmark: {required_benchmark:.4f}")
+        print(f"Implied Ratchet Rate: {implied_ratchet:.4f}")
+        print(f"Remaining Surplus: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum():.2f}")
+        print(f"Surplus Ratio: {(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum() / self.facilities_data[f'Allocations_{year}'].sum()):.4f}")
 
     def adjust_benchmark_rate(self, year: int) -> None:
         """Adjust benchmark ratchet rate based on market conditions."""
