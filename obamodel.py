@@ -66,6 +66,9 @@ class obamodel:
         self.abatement_cost_curve = abatement_cost_curve
         self.start_year = start_year
         self.end_year = end_year
+        
+        # Update facility-level parameters with scenario values
+        self.facilities_data['Benchmark Ratchet Rate'] = scenario_params.get("benchmark_ratchet_rate", 0.03)
     
         # Use scenario parameters
         self.floor_price = scenario_params.get("floor_price", 20)
@@ -157,6 +160,18 @@ class obamodel:
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
         print(f"Years elapsed: {years_elapsed}")
     
+        # First calculate benchmark updates
+        print("\nBenchmark Update:")
+        print(f"Current Ratchet Rate: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
+        
+        self.facilities_data[f'Benchmark_{year}'] = (
+            self.facilities_data['Baseline Benchmark'] *
+            (1 - self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
+        )
+        
+        print(f"Baseline Benchmark Average: {self.facilities_data['Baseline Benchmark'].mean():.4f}")
+        print(f"Updated Benchmark Average: {self.facilities_data[f'Benchmark_{year}'].mean():.4f}")
+        
         # Adjust emissions intensity based on prior abatement
         if year > self.start_year:
             prior_emissions = self.facilities_data[f'Emissions_{year - 1}']
@@ -186,18 +201,7 @@ class obamodel:
         self.facilities_data['Benchmark Ratchet Rate'] = np.clip(
             required_ratchet_rate, 0.01, 0.20  # Limit annual decline to 1-20%
         )
-    
-        # Calculate benchmark with adjusted ratchet rate
-        self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] *
-            (1 - self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
-        )
-
-        print("\nBenchmark Calculations:")
-        print(f"  Average Baseline Benchmark: {self.facilities_data['Baseline Benchmark'].mean():.4f}")
-        print(f"  Average Current Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():.4f}")
-        print(f"  Ratchet Rate Applied: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
-        
+          
         # Track actual ratchet rate applied
         self.facilities_data[f'Applied_Ratchet_Rate_{year}'] = (
             1 - (self.facilities_data[f'Benchmark_{year}'] / 
@@ -586,9 +590,10 @@ class obamodel:
         for scenario in scenarios:
             scenario_name = scenario["name"].replace(" ", "_").lower()
             print(f"\nRunning Scenario: {scenario['name']}")
+            print(f"Benchmark Ratchet Rate: {scenario['benchmark_ratchet_rate']:.4f}")
             
             try:
-                # Initialize and run model for this scenario
+               # Initialize new model instance for each scenario
                 model = obamodel(
                     facilities_data=facilities_data.copy(),
                     abatement_cost_curve=abatement_cost_curve.copy(),
