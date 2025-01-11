@@ -160,17 +160,23 @@ class obamodel:
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
         print(f"Years elapsed: {years_elapsed}")
     
-        # First calculate benchmark updates
+        # Use scenario's ratchet rate directly
         print("\nBenchmark Update:")
-        print(f"Current Ratchet Rate: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
+        print(f"Scenario Ratchet Rate: {self.benchmark_ratchet_rate:.4f}")
         
+        # Calculate benchmark using scenario rate
         self.facilities_data[f'Benchmark_{year}'] = (
             self.facilities_data['Baseline Benchmark'] *
-            (1 - self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
+            (1 - self.benchmark_ratchet_rate) ** years_elapsed
         )
         
+        # Inside calculate_dynamic_values
+        print("\nBenchmark Progression Analysis:")
+        print(f"Scenario Ratchet Rate: {self.benchmark_ratchet_rate:.4f}")
+        print(f"Years Elapsed: {years_elapsed}")
         print(f"Baseline Benchmark Average: {self.facilities_data['Baseline Benchmark'].mean():.4f}")
         print(f"Updated Benchmark Average: {self.facilities_data[f'Benchmark_{year}'].mean():.4f}")
+        print(f"Cumulative Reduction: {((1 - self.facilities_data[f'Benchmark_{year}'].mean() / self.facilities_data['Baseline Benchmark'].mean()) * 100):.1f}%")
         
         # Adjust emissions intensity based on prior abatement
         if year > self.start_year:
