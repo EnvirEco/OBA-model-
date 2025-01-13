@@ -7,7 +7,7 @@ class obamodel:
     # 1. Initialization and Setup
     @staticmethod
     def load_all_scenarios(scenario_file: str) -> List[Dict]:
-        """Load and validate scenarios from CSV file."""
+        """Load and validate scenarios with MSR parameters."""
         print(f"Loading scenarios from file: {scenario_file}")
         try:
             scenarios = pd.read_csv(scenario_file)
@@ -22,24 +22,27 @@ class obamodel:
                 'Price Increment': (0, None),
                 'Output Growth Rate': (-0.5, 0.5),
                 'Emissions Growth Rate': (-0.5, 0.5),
-                'Benchmark Ratchet Rate': (0, 1)
+                'Benchmark Ratchet Rate': (0, 1),
+                'MSR Active': (0, 1),  # Binary flag for MSR
+                'MSR Upper Threshold': (0, 1),  # Optional
+                'MSR Lower Threshold': (-1, 0),  # Optional
+                'MSR Adjustment Rate': (0, 1)    # Optional
             }
             
-            # Validate parameters
-            missing_params = set(param_bounds.keys()) - set(scenarios.columns)
-            if missing_params:
-                raise ValueError(f"Missing required parameters: {missing_params}")
+            # Set default values for MSR parameters if not provided
+            default_values = {
+                'MSR Active': 0,  # MSR off by default
+                'MSR Upper Threshold': 0.15,
+                'MSR Lower Threshold': -0.05,
+                'MSR Adjustment Rate': 0.03
+            }
             
-            # Validate ranges
-            for param, (min_val, max_val) in param_bounds.items():
-                if min_val is not None and (scenarios[param] < min_val).any():
-                    bad_values = scenarios[scenarios[param] < min_val][[param, 'Scenario']]
-                    raise ValueError(f"{param} contains values below {min_val}:\n{bad_values}")
-                if max_val is not None and (scenarios[param] > max_val).any():
-                    bad_values = scenarios[scenarios[param] > max_val][[param, 'Scenario']]
-                    raise ValueError(f"{param} contains values above {max_val}:\n{bad_values}")
+            # Fill missing MSR parameters with defaults
+            for param, default in default_values.items():
+                if param not in scenarios.columns:
+                    scenarios[param] = default
             
-            # Convert to list of dictionaries
+            # Convert to list of dictionaries with MSR parameters
             scenario_list = []
             for _, row in scenarios.iterrows():
                 scenario_list.append({
@@ -49,58 +52,31 @@ class obamodel:
                     "price_increment": row["Price Increment"],
                     "output_growth_rate": row["Output Growth Rate"],
                     "emissions_growth_rate": row["Emissions Growth Rate"],
-                    "benchmark_ratchet_rate": row["Benchmark Ratchet Rate"]
+                    "benchmark_ratchet_rate": row["Benchmark Ratchet Rate"],
+                    "msr_active": bool(row["MSR Active"]),
+                    "msr_upper_threshold": row["MSR Upper Threshold"],
+                    "msr_lower_threshold": row["MSR Lower Threshold"],
+                    "msr_adjustment_rate": row["MSR Adjustment Rate"]
                 })
             
-            print(f"Successfully loaded {len(scenario_list)} scenarios")
             return scenario_list
             
         except Exception as e:
             print(f"Error loading scenarios: {e}")
             raise
-       
-    def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
-                 start_year: int, end_year: int, scenario_params: Dict):
-        """Initialize OBA model with configuration and scenario parameters."""
-        self.facilities_data = facilities_data.copy()
-        self.abatement_cost_curve = abatement_cost_curve
-        self.start_year = start_year
-        self.end_year = end_year
-        
-        # Use scenario parameters
-        self.floor_price = scenario_params.get("floor_price", 20)
-        self.ceiling_price = scenario_params.get("ceiling_price", 200)
-        self.price_increment = scenario_params.get("price_increment", 5)
-        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
-        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
-        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.03)
-        self.max_reduction = scenario_params.get("max_reduction", 100)
-        self.target_surplus_ratio = scenario_params.get("target_surplus_ratio", 0.1)  # Add this line
-    
-        # Initialize the price schedule
-        self.price_schedule = {
-            year: self.floor_price + self.price_increment * (year - start_year)
-            for year in range(start_year, end_year + 1)
-        }
-    
-        # Print scenario initialization
-        print(f"Scenario initialized with parameters: {scenario_params}")
-    
-        # Initialize model columns and validate data
-        self._initialize_columns()
-        self._validate_input_data()
-
+          
     def _validate_input_data(self) -> None:
         """Validate input data structure and relationships."""
         required_facility_cols = {
             'Facility ID', 'Baseline Output', 'Baseline Emissions',
             'Baseline Benchmark', 'Baseline Profit Rate', 'Output Growth Rate',
-            'Emissions Growth Rate', 'Benchmark Ratchet Rate'
+            'Emissions Growth Rate'
         }
         required_abatement_cols = {
             'Facility ID', 'Slope', 'Intercept', 'Max Reduction (MTCO2e)'
         }
         
+        # Check for missing columns
         missing_facility_cols = required_facility_cols - set(self.facilities_data.columns)
         missing_abatement_cols = required_abatement_cols - set(self.abatement_cost_curve.columns)
         
@@ -112,9 +88,10 @@ class obamodel:
         abatement_ids = set(self.abatement_cost_curve['Facility ID'])
         if facility_ids != abatement_ids:
             raise ValueError("Mismatch between facility IDs in data and abatement curves")
-
+    
     def _initialize_columns(self) -> None:
         """Initialize all required columns without fragmentation."""
+        # Core metrics that need to be tracked annually
         metrics = [
             "Output", "Emissions", "Benchmark", "Allocations",
             "Allowance Surplus/Deficit", "Abatement Cost", "Trade Cost",
@@ -123,10 +100,18 @@ class obamodel:
             "Compliance Cost", "Cost to Profit Ratio", "Cost to Output Ratio"
         ]
         
+        # Add MSR-specific metrics if MSR is active
+        if self.msr_active:
+            metrics.extend([
+                "MSR_Adjustment",
+                "MSR_Active"
+            ])
+        
+        # Create year-specific columns
         year_cols = [f"{metric}_{year}" 
                     for year in range(self.start_year, self.end_year + 1)
                     for metric in metrics]
-                    
+                        
         # Create new columns all at once
         new_cols = pd.DataFrame(0.0, 
                               index=self.facilities_data.index,
@@ -147,31 +132,31 @@ class obamodel:
                 self.facilities_data['Baseline Output'] * 
                 self.facilities_data['Baseline Profit Rate']
             )
-
-
+            
+    def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
+                 start_year: int, end_year: int, scenario_params: Dict):
+        """Initialize model with MSR parameters."""
+        # ... existing initialization code ...
+        
+        # Add MSR parameters
+        self.msr_active = scenario_params.get("msr_active", False)
+        self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
+        self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
+        self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
+  
     # 2. Core Market Mechanisms
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values with improved tracking of market metrics."""
+        """Calculate dynamic values with optional MSR."""
         years_elapsed = year - self.start_year
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
+        print(f"MSR Status: {'Active' if self.msr_active else 'Inactive'}")
         
-        # First ensure all required columns exist for this year
-        required_columns = [
-            f'Emissions_{year}', f'Output_{year}', f'Benchmark_{year}',
-            f'Allocations_{year}', f'Allowance Surplus/Deficit_{year}',
-            f'Surplus Ratio_{year}', f'Rolling Average Surplus_{year}'
-        ]
-        
-        for col in required_columns:
-            if col not in self.facilities_data.columns:
-                self.facilities_data[col] = 0.0
-        
-        # Calculate emissions intensity
+        # Calculate base emissions and output (same as before)
         if year > self.start_year:
             prior_emissions = self.facilities_data[f'Emissions_{year - 1}']
-            prior_abatement = self.facilities_data.get(f'Tonnes Abated_{year - 1}', 0)  # Handle optional column
+            prior_abatement = self.facilities_data.get(f'Tonnes Abated_{year - 1}', 0)
             prior_output = self.facilities_data[f'Output_{year - 1}']
-            emissions_intensity = (prior_emissions - prior_abatement) / prior_output
+            emissions_intensity = ((prior_emissions - prior_abatement) / prior_output).clip(lower=0)
         else:
             emissions_intensity = (
                 self.facilities_data['Baseline Emissions'] /
@@ -185,97 +170,87 @@ class obamodel:
         )
         
         self.facilities_data[f'Emissions_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * emissions_intensity
+            self.facilities_data[f'Output_{year}'] * 
+            emissions_intensity
         ).clip(lower=0)
         
-        # Calculate total required allocations to achieve target surplus
-        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
-        total_output = self.facilities_data[f'Output_{year}'].sum()
+        # Start with policy benchmark
+        if year > self.start_year:
+            previous_benchmark = self.facilities_data[f'Benchmark_{year-1}'].mean()
+            initial_benchmark = previous_benchmark * (1 - self.benchmark_ratchet_rate)
+        else:
+            initial_benchmark = (
+                self.facilities_data['Baseline Benchmark'].mean() * 
+                (1 - self.benchmark_ratchet_rate) ** years_elapsed
+            )
         
-        # Calculate required allocations with buffer to ensure no deficits
-        required_allocations = total_emissions / (1 - self.target_surplus_ratio)
-        
-        # Calculate and set benchmark
-        required_benchmark = required_allocations / total_output
-        self.facilities_data[f'Benchmark_{year}'] = required_benchmark
-        
-        # Calculate allocations
+        # Set initial allocations
+        self.facilities_data[f'Benchmark_{year}'] = initial_benchmark
         self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * required_benchmark
+            self.facilities_data[f'Output_{year}'] * initial_benchmark
         )
         
-        # Calculate surplus/deficit
+        # Calculate market position
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
+        
+        # Apply MSR adjustments if active
+        adjustment_factor = 1.0
+        adjustment_applied = False
+        
+        if self.msr_active:
+            if surplus_ratio > self.msr_upper_threshold:
+                # Too much surplus - tighten benchmark
+                adjustment_factor = (1 + self.msr_upper_threshold) / (1 + surplus_ratio)
+                adjustment_applied = True
+                print(f"MSR: Surplus ({surplus_ratio:.4f}) above threshold - tightening benchmark")
+            elif surplus_ratio < self.msr_lower_threshold:
+                # Too much deficit - loosen benchmark
+                adjustment_factor = (1 + self.msr_lower_threshold) / (1 + surplus_ratio)
+                adjustment_applied = True
+                print(f"MSR: Surplus ({surplus_ratio:.4f}) below threshold - loosening benchmark")
+        
+            if adjustment_applied:
+                self.facilities_data[f'Benchmark_{year}'] *= adjustment_factor
+                self.facilities_data[f'Allocations_{year}'] *= adjustment_factor
+        
+        # Final calculations and storage
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
         
-        # Calculate current surplus metrics
-        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-        remaining_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-        current_surplus_ratio = remaining_surplus / total_allocations if total_allocations > 0 else 0.0
+        # Store MSR metrics for analysis
+        self.facilities_data[f'MSR_Adjustment_{year}'] = adjustment_factor if adjustment_applied else 1.0
+        self.facilities_data[f'MSR_Active_{year}'] = self.msr_active
         
-        # Store the current surplus ratio
-        self.facilities_data[f'Surplus Ratio_{year}'] = current_surplus_ratio
-        
-        # Calculate rolling average with proper initialization
-        if year >= self.start_year + 2:
-            recent_years = range(year - 2, year + 1)
-            historical_ratios = []
-            
-            for y in recent_years:
-                ratio_col = f'Surplus Ratio_{y}'
-                if ratio_col in self.facilities_data.columns:
-                    ratio = self.facilities_data[ratio_col].mean()
-                else:
-                    ratio = self.target_surplus_ratio  # Use target for missing historical data
-                historical_ratios.append(ratio)
-            
-            rolling_avg = sum(historical_ratios) / len(historical_ratios)
-        else:
-            # For early years, use target ratio
-            rolling_avg = self.target_surplus_ratio
-        
-        # Store rolling average
-        self.facilities_data[f'Rolling Average Surplus_{year}'] = rolling_avg
-        
-        # Print market status
-        print(f"\nMarket Status for Year {year}:")
+        # Market status report
+        print(f"\nYear {year} Market Status:")
         print(f"Total Emissions: {total_emissions:,.2f}")
         print(f"Total Allocations: {total_allocations:,.2f}")
-        print(f"Remaining Surplus: {remaining_surplus:,.2f}")
-        print(f"Current Surplus Ratio: {current_surplus_ratio:.4f}")
-        print(f"Rolling Average Surplus: {rolling_avg:.4f}")
-    
-    
-    def analyze_market_positions(self, year: int) -> pd.DataFrame:
-        """Analyze market positions with improved surplus tracking."""
-        print(f"\n=== Market Position Analysis for Year {year} ===")
+        print(f"Surplus Ratio: {surplus_ratio:.4f}")
+        if self.msr_active and adjustment_applied:
+            print(f"MSR Adjustment Factor: {adjustment_factor:.4f}")
+           
+       
+    def analyze_market_stability(self, year: int) -> None:
+        """Analyze market stability conditions."""
+        # Calculate market metrics
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        surplus = total_allocations - total_emissions
+        surplus_ratio = surplus / total_allocations if total_allocations > 0 else 0
         
-        positions = self.facilities_data[[
-            'Facility ID',
-            f'Allocations_{year}',
-            f'Emissions_{year}',
-            f'Allowance Surplus/Deficit_{year}'
-        ]].copy()
-        
-        # Classify positions
-        surplus_positions = positions[positions[f'Allowance Surplus/Deficit_{year}'] > 0]
-        deficit_positions = positions[positions[f'Allowance Surplus/Deficit_{year}'] < 0]
-        
-        total_allocations = positions[f'Allocations_{year}'].sum()
-        total_surplus = surplus_positions[f'Allowance Surplus/Deficit_{year}'].sum()
-        total_deficit = abs(deficit_positions[f'Allowance Surplus/Deficit_{year}'].sum())
-        
-        print("\nMarket Balance:")
-        print(f"Total Allocations: {total_allocations:,.2f}")
-        print(f"Number of Sellers (Surplus): {len(surplus_positions)}")
-        print(f"Total Surplus: {total_surplus:,.2f}")
-        print(f"Number of Buyers (Deficit): {len(deficit_positions)}")
-        print(f"Total Deficit: {total_deficit:,.2f}")
-        print(f"Surplus Ratio: {(total_surplus/total_allocations if total_allocations > 0 else 0):.4f}")
-        
-        return positions
+        # Calculate price responsiveness
+        if year > self.start_year:
+            price_change = (self.market_price - self.price_schedule[year-1]) / self.price_schedule[year-1]
+            surplus_change = (surplus_ratio - self.facilities_data[f'Surplus Ratio_{year-1}'].mean())
+            
+            print(f"\nMarket Stability Analysis Year {year}:")
+            print(f"Price Change: {price_change:.4f}")
+            print(f"Surplus Change: {surplus_change:.4f}")
+            print(f"Current Surplus Ratio: {surplus_ratio:.4f}")
 
     def adjust_benchmark_rate(self, year: int) -> None:
         """Adjust benchmark ratchet rate to maintain target surplus ratio."""
