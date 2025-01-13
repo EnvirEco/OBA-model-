@@ -202,12 +202,12 @@ class obamodel:
   
     # 2. Core Market Mechanisms
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values with optional MSR."""
+        """Calculate dynamic values with MSR instead of target surplus."""
         years_elapsed = year - self.start_year
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
         print(f"MSR Status: {'Active' if self.msr_active else 'Inactive'}")
         
-        # Calculate base emissions and output (same as before)
+        # Calculate emissions intensity
         if year > self.start_year:
             prior_emissions = self.facilities_data[f'Emissions_{year - 1}']
             prior_abatement = self.facilities_data.get(f'Tonnes Abated_{year - 1}', 0)
@@ -230,7 +230,7 @@ class obamodel:
             emissions_intensity
         ).clip(lower=0)
         
-        # Start with policy benchmark
+        # Calculate benchmark and initial allocations
         if year > self.start_year:
             previous_benchmark = self.facilities_data[f'Benchmark_{year-1}'].mean()
             initial_benchmark = previous_benchmark * (1 - self.benchmark_ratchet_rate)
@@ -240,7 +240,6 @@ class obamodel:
                 (1 - self.benchmark_ratchet_rate) ** years_elapsed
             )
         
-        # Set initial allocations
         self.facilities_data[f'Benchmark_{year}'] = initial_benchmark
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * initial_benchmark
@@ -249,44 +248,45 @@ class obamodel:
         # Calculate market position
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-        surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
+        current_surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
         
         # Apply MSR adjustments if active
         adjustment_factor = 1.0
-        adjustment_applied = False
-        
         if self.msr_active:
-            if surplus_ratio > self.msr_upper_threshold:
+            if current_surplus_ratio > self.msr_upper_threshold:
                 # Too much surplus - tighten benchmark
-                adjustment_factor = (1 + self.msr_upper_threshold) / (1 + surplus_ratio)
-                adjustment_applied = True
-                print(f"MSR: Surplus ({surplus_ratio:.4f}) above threshold - tightening benchmark")
-            elif surplus_ratio < self.msr_lower_threshold:
+                adjustment_factor = (1 + self.msr_upper_threshold) / (1 + current_surplus_ratio)
+                print(f"MSR: Surplus ({current_surplus_ratio:.4f}) above threshold - tightening")
+                
+            elif current_surplus_ratio < self.msr_lower_threshold:
                 # Too much deficit - loosen benchmark
-                adjustment_factor = (1 + self.msr_lower_threshold) / (1 + surplus_ratio)
-                adjustment_applied = True
-                print(f"MSR: Surplus ({surplus_ratio:.4f}) below threshold - loosening benchmark")
-        
-            if adjustment_applied:
+                adjustment_factor = (1 + self.msr_lower_threshold) / (1 + current_surplus_ratio)
+                print(f"MSR: Surplus ({current_surplus_ratio:.4f}) below threshold - loosening")
+            
+            if adjustment_factor != 1.0:
                 self.facilities_data[f'Benchmark_{year}'] *= adjustment_factor
                 self.facilities_data[f'Allocations_{year}'] *= adjustment_factor
+                
+                # Recalculate market position after adjustment
+                total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+                current_surplus_ratio = (total_allocations - total_emissions) / total_allocations
         
-        # Final calculations and storage
+        # Calculate and store surplus/deficit
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
         
-        # Store MSR metrics for analysis
-        self.facilities_data[f'MSR_Adjustment_{year}'] = adjustment_factor if adjustment_applied else 1.0
-        self.facilities_data[f'MSR_Active_{year}'] = self.msr_active
+        # Store MSR metrics if active
+        if self.msr_active:
+            self.facilities_data[f'MSR_Adjustment_{year}'] = adjustment_factor
         
         # Market status report
         print(f"\nYear {year} Market Status:")
         print(f"Total Emissions: {total_emissions:,.2f}")
         print(f"Total Allocations: {total_allocations:,.2f}")
-        print(f"Surplus Ratio: {surplus_ratio:.4f}")
-        if self.msr_active and adjustment_applied:
+        print(f"Current Surplus Ratio: {current_surplus_ratio:.4f}")
+        if self.msr_active:
             print(f"MSR Adjustment Factor: {adjustment_factor:.4f}")
            
        
@@ -314,10 +314,7 @@ class obamodel:
             # Not enough data for a 3-year rolling average
             return
         
-        # Calculate adjustment based on rolling surplus ratio
-        rolling_average = self.facilities_data[f'Rolling Average Surplus_{year}'].mean()
-        adjustment = 0.005 * (self.target_surplus_ratio - rolling_average)
-    
+           
         # Update and enforce bounds
         self.facilities_data['Benchmark Ratchet Rate'] += adjustment
         self.facilities_data['Benchmark Ratchet Rate'] = np.clip(
@@ -804,31 +801,12 @@ class obamodel:
         # Calculate surplus and deficit
         remaining_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
         remaining_deficit = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-        target_surplus = self.target_surplus_ratio * total_allocations
-    
+            
         # Surplus ratio for the year
         surplus_ratio = remaining_surplus / total_allocations if total_allocations > 0 else 0.0
         self.facilities_data[f'Surplus Ratio_{year}'] = surplus_ratio
     
-        # Rolling average surplus ratio (ensure enough years of data)
-        if year >= self.start_year + 2:  # Adjust rolling window if needed
-            rolling_surplus_ratios = [
-                self.facilities_data.get(f'Surplus Ratio_{yr}', 0.0)
-                for yr in range(year - 2, year)
-            ]
-            rolling_average_surplus = np.mean(rolling_surplus_ratios)
-        else:
-            rolling_average_surplus = self.target_surplus_ratio  # Default for initial years
-    
-        # Adjust benchmark ratchet rate dynamically
-        adjustment = 0.005 * (self.target_surplus_ratio - rolling_average_surplus)
-        self.facilities_data['Benchmark Ratchet Rate'] += adjustment
-    
-        # Ensure ratchet rate stays within bounds
-        self.facilities_data['Benchmark Ratchet Rate'] = np.clip(
-            self.facilities_data['Benchmark Ratchet Rate'], 0.01, 0.20
-        )
-    
+                    
         # Emission-weighted benchmark ratchet rate
         weighted_ratchet_rate = (
             (self.facilities_data['Baseline Emissions'] *
@@ -842,10 +820,7 @@ class obamodel:
         print(f"Total Emissions: {total_emissions:.2f}")
         print(f"Remaining Surplus: {remaining_surplus:.2f}")
         print(f"Remaining Deficit: {remaining_deficit:.2f}")
-        print(f"Target Surplus: {target_surplus:.2f}")
-        print(f"Surplus Ratio: {surplus_ratio:.4f}")
-        print(f"Rolling Average Surplus Ratio: {rolling_average_surplus:.4f}")
-        print(f"Emission-Weighted Ratchet Rate: {weighted_ratchet_rate:.4f}")
+       
     
         # Return market summary
         return {
@@ -864,6 +839,5 @@ class obamodel:
             'Remaining Surplus': remaining_surplus,
             'Remaining Deficit': remaining_deficit,
             'Surplus Ratio': surplus_ratio,
-            'Rolling Average Surplus Ratio': rolling_average_surplus,
-            'Emission-Weighted Ratchet Rate': weighted_ratchet_rate
+            
         }
