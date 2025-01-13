@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
+from typing import Dict, List, Tuple
 import os
-from typing import Tuple, Dict, List
 
 class obamodel:
     # 1. Initialization and Setup
@@ -62,7 +62,46 @@ class obamodel:
             print(f"Error loading scenarios: {e}")
             raise
   
-          
+    def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
+                 start_year: int, end_year: int, scenario_params: Dict):
+        """Initialize OBA model with configuration and scenario parameters."""
+        self.facilities_data = facilities_data.copy()
+        self.abatement_cost_curve = abatement_cost_curve.copy()
+        self.start_year = start_year
+        self.end_year = end_year
+        
+        # Extract scenario parameters
+        self.floor_price = scenario_params.get("floor_price", 20)
+        self.ceiling_price = scenario_params.get("ceiling_price", 200)
+        self.price_increment = scenario_params.get("price_increment", 5)
+        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
+        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
+        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.03)
+        
+        # MSR parameters
+        self.msr_active = scenario_params.get("msr_active", False)
+        self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
+        self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
+        self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
+        
+        # Initialize price schedule
+        self.price_schedule = {
+            year: self.floor_price + self.price_increment * (year - start_year)
+            for year in range(start_year, end_year + 1)
+        }
+        
+        # Print initialization parameters
+        print("\nInitializing OBA Model with parameters:")
+        print(f"Time period: {start_year} - {end_year}")
+        print(f"Price range: {self.floor_price} - {self.ceiling_price}")
+        print(f"Growth rates: Output {self.output_growth_rate}, Emissions {self.emissions_growth_rate}")
+        print(f"Benchmark ratchet rate: {self.benchmark_ratchet_rate}")
+        print(f"MSR active: {self.msr_active}")
+        
+        # Initialize model columns and validate data
+        self._initialize_columns()
+        self._validate_input_data()
+                     
     def _validate_input_data(self) -> None:
         """Validate input data structure and relationships."""
         required_facility_cols = {
@@ -159,46 +198,7 @@ class obamodel:
         print(f"First year columns present: {all(f'{m}_{self.start_year}' in self.facilities_data.columns for m in metrics)}")
         print(f"Last year columns present: {all(f'{m}_{self.end_year}' in self.facilities_data.columns for m in metrics)}")
         
-    def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
-                 start_year: int, end_year: int, scenario_params: Dict):
-        """Initialize OBA model with configuration and scenario parameters."""
-        self.facilities_data = facilities_data.copy()
-        self.abatement_cost_curve = abatement_cost_curve.copy()
-        self.start_year = start_year
-        self.end_year = end_year
-        
-        # Extract scenario parameters
-        self.floor_price = scenario_params.get("floor_price", 20)
-        self.ceiling_price = scenario_params.get("ceiling_price", 200)
-        self.price_increment = scenario_params.get("price_increment", 5)
-        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
-        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
-        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.03)
-        
-        # MSR parameters
-        self.msr_active = scenario_params.get("msr_active", False)
-        self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
-        self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
-        self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
-        
-        # Initialize price schedule
-        self.price_schedule = {
-            year: self.floor_price + self.price_increment * (year - start_year)
-            for year in range(start_year, end_year + 1)
-        }
-        
-        # Print initialization parameters
-        print("\nInitializing OBA Model with parameters:")
-        print(f"Time period: {start_year} - {end_year}")
-        print(f"Price range: {self.floor_price} - {self.ceiling_price}")
-        print(f"Growth rates: Output {self.output_growth_rate}, Emissions {self.emissions_growth_rate}")
-        print(f"Benchmark ratchet rate: {self.benchmark_ratchet_rate}")
-        print(f"MSR active: {self.msr_active}")
-        
-        # Initialize model columns and validate data
-        self._initialize_columns()
-        self._validate_input_data()
-
+    
   
     # 2. Core Market Mechanisms
     def calculate_dynamic_values(self, year: int) -> None:
