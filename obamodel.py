@@ -7,7 +7,7 @@ class obamodel:
     # 1. Initialization and Setup
     @staticmethod
     def load_all_scenarios(scenario_file: str) -> List[Dict]:
-        """Load and validate scenarios with MSR parameters."""
+        """Load and validate scenarios from CSV file."""
         print(f"Loading scenarios from file: {scenario_file}")
         try:
             scenarios = pd.read_csv(scenario_file)
@@ -23,26 +23,22 @@ class obamodel:
                 'Output Growth Rate': (-0.5, 0.5),
                 'Emissions Growth Rate': (-0.5, 0.5),
                 'Benchmark Ratchet Rate': (0, 1),
-                'MSR Active': (0, 1),  # Binary flag for MSR
-                'MSR Upper Threshold': (0, 1),  # Optional
-                'MSR Lower Threshold': (-1, 0),  # Optional
-                'MSR Adjustment Rate': (0, 1)    # Optional
+                'MSR Active': (0, 1),
+                'MSR Upper Threshold': (0, 1),
+                'MSR Lower Threshold': (-1, 0),
+                'MSR Adjustment Rate': (0, 1)
             }
             
-            # Set default values for MSR parameters if not provided
-            default_values = {
-                'MSR Active': 0,  # MSR off by default
-                'MSR Upper Threshold': 0.15,
-                'MSR Lower Threshold': -0.05,
-                'MSR Adjustment Rate': 0.03
-            }
-            
-            # Fill missing MSR parameters with defaults
-            for param, default in default_values.items():
+            # Validate parameters
+            for param, (min_val, max_val) in param_bounds.items():
                 if param not in scenarios.columns:
-                    scenarios[param] = default
+                    raise ValueError(f"Missing required parameter: {param}")
+                if min_val is not None and (scenarios[param] < min_val).any():
+                    raise ValueError(f"{param} contains values below {min_val}")
+                if max_val is not None and (scenarios[param] > max_val).any():
+                    raise ValueError(f"{param} contains values above {max_val}")
             
-            # Convert to list of dictionaries with MSR parameters
+            # Convert to list of dictionaries with standardized parameter names
             scenario_list = []
             for _, row in scenarios.iterrows():
                 scenario_list.append({
@@ -59,11 +55,13 @@ class obamodel:
                     "msr_adjustment_rate": row["MSR Adjustment Rate"]
                 })
             
+            print(f"Successfully loaded {len(scenario_list)} scenarios")
             return scenario_list
             
         except Exception as e:
             print(f"Error loading scenarios: {e}")
             raise
+  
           
     def _validate_input_data(self) -> None:
         """Validate input data structure and relationships."""
@@ -90,7 +88,7 @@ class obamodel:
             raise ValueError("Mismatch between facility IDs in data and abatement curves")
     
     def _initialize_columns(self) -> None:
-        """Initialize all required columns without fragmentation."""
+        """Initialize all required columns with explicit creation and verification."""
         # Core metrics that need to be tracked annually
         metrics = [
             "Output", "Emissions", "Benchmark", "Allocations",
@@ -107,24 +105,46 @@ class obamodel:
                 "MSR_Active"
             ])
         
-        # Create year-specific columns
-        year_cols = [f"{metric}_{year}" 
-                    for year in range(self.start_year, self.end_year + 1)
-                    for metric in metrics]
-                        
-        # Create new columns all at once
-        new_cols = pd.DataFrame(0.0, 
-                              index=self.facilities_data.index,
-                              columns=year_cols)
+        # Create and verify year-specific columns
+        year_cols = []
+        for year in range(self.start_year, self.end_year + 1):
+            for metric in metrics:
+                col_name = f"{metric}_{year}"
+                year_cols.append(col_name)
+                
+        # Create new columns with explicit zeros
+        new_cols = pd.DataFrame(
+            data=0.0,
+            index=self.facilities_data.index,
+            columns=year_cols
+        )
+        
+        # Verify all required columns exist before concatenating
+        missing_cols = set(year_cols) - set(new_cols.columns)
+        if missing_cols:
+            raise ValueError(f"Failed to create columns: {missing_cols}")
         
         # Concat with existing data
         self.facilities_data = pd.concat([self.facilities_data, new_cols], axis=1)
         
-        # Calculate Baseline Allocations
-        self.facilities_data['Baseline Allocations'] = (
-            self.facilities_data['Baseline Output'] *
-            self.facilities_data['Baseline Benchmark']
-        )
+        # Verify critical columns after concatenation
+        for year in range(self.start_year, self.end_year + 1):
+            critical_cols = [
+                f"Output_{year}",
+                f"Emissions_{year}",
+                f"Tonnes Abated_{year}",
+                f"Allocations_{year}"
+            ]
+            missing = [col for col in critical_cols if col not in self.facilities_data.columns]
+            if missing:
+                raise ValueError(f"Critical columns missing after initialization: {missing}")
+        
+        # Calculate Baseline Allocations if needed
+        if 'Baseline Allocations' not in self.facilities_data.columns:
+            self.facilities_data['Baseline Allocations'] = (
+                self.facilities_data['Baseline Output'] *
+                self.facilities_data['Baseline Benchmark']
+            )
     
         # Calculate initial profit if not provided
         if 'Profit' not in self.facilities_data.columns:
@@ -132,17 +152,53 @@ class obamodel:
                 self.facilities_data['Baseline Output'] * 
                 self.facilities_data['Baseline Profit Rate']
             )
-            
+        
+        # Print verification of critical columns
+        print("\nInitialized columns verification:")
+        print(f"Total columns created: {len(year_cols)}")
+        print(f"First year columns present: {all(f'{m}_{self.start_year}' in self.facilities_data.columns for m in metrics)}")
+        print(f"Last year columns present: {all(f'{m}_{self.end_year}' in self.facilities_data.columns for m in metrics)}")
+        
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
                  start_year: int, end_year: int, scenario_params: Dict):
-        """Initialize model with MSR parameters."""
-        # ... existing initialization code ...
+        """Initialize OBA model with configuration and scenario parameters."""
+        self.facilities_data = facilities_data.copy()
+        self.abatement_cost_curve = abatement_cost_curve.copy()
+        self.start_year = start_year
+        self.end_year = end_year
         
-        # Add MSR parameters
+        # Extract scenario parameters
+        self.floor_price = scenario_params.get("floor_price", 20)
+        self.ceiling_price = scenario_params.get("ceiling_price", 200)
+        self.price_increment = scenario_params.get("price_increment", 5)
+        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
+        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
+        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.03)
+        
+        # MSR parameters
         self.msr_active = scenario_params.get("msr_active", False)
         self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
         self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
         self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
+        
+        # Initialize price schedule
+        self.price_schedule = {
+            year: self.floor_price + self.price_increment * (year - start_year)
+            for year in range(start_year, end_year + 1)
+        }
+        
+        # Print initialization parameters
+        print("\nInitializing OBA Model with parameters:")
+        print(f"Time period: {start_year} - {end_year}")
+        print(f"Price range: {self.floor_price} - {self.ceiling_price}")
+        print(f"Growth rates: Output {self.output_growth_rate}, Emissions {self.emissions_growth_rate}")
+        print(f"Benchmark ratchet rate: {self.benchmark_ratchet_rate}")
+        print(f"MSR active: {self.msr_active}")
+        
+        # Initialize model columns and validate data
+        self._initialize_columns()
+        self._validate_input_data()
+
   
     # 2. Core Market Mechanisms
     def calculate_dynamic_values(self, year: int) -> None:
