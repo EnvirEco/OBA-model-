@@ -231,25 +231,32 @@ class obamodel:
         ).clip(lower=0)
         
         # Calculate benchmark and initial allocations
-        if year > self.start_year:
+        if year == self.start_year:
+            initial_benchmark = (
+                self.facilities_data['Baseline Emissions'].mean() /
+                self.facilities_data['Baseline Output'].mean()
+            )
+        else:
             previous_benchmark = self.facilities_data[f'Benchmark_{year-1}'].mean()
             initial_benchmark = previous_benchmark * (1 - self.benchmark_ratchet_rate)
-        else:
-            initial_benchmark = (
-                self.facilities_data['Baseline Benchmark'].mean() * 
-                (1 - self.benchmark_ratchet_rate) ** years_elapsed
-            )
         
         self.facilities_data[f'Benchmark_{year}'] = initial_benchmark
-        self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * initial_benchmark
-        )
-        
+                
         # Calculate market position
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
         current_surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
         
+        # Adjust allocations globally to match total emissions
+        if total_allocations != total_emissions:
+            adjustment_factor = total_emissions / total_allocations
+            self.facilities_data[f'Allocations_{year}'] *= adjustment_factor
+        
+        #cap to ensure allocations do not exceed emissions
+        self.facilities_data[f'Allocations_{year}'] = (
+            self.facilities_data[f'Output_{year}'] * initial_benchmark
+        ).clip(upper=2 * self.facilities_data[f'Emissions_{year}'])
+      
         # Apply MSR adjustments if active
         adjustment_factor = 1.0
         if self.msr_active:
@@ -457,6 +464,15 @@ class obamodel:
             print("No buyers or sellers available. No trades executed.")
             return
         
+        # Ensure trades resolve remaining surplus and deficit
+        remaining_surplus = sellers[f'Allowance Surplus/Deficit_{year}'].sum()
+        remaining_deficit = abs(buyers[f'Allowance Surplus/Deficit_{year}'].sum())
+    
+        if remaining_surplus > 0 and remaining_deficit > 0:
+            # Calculate the maximum feasible trade volume
+            total_trade_volume = min(remaining_surplus, remaining_deficit)
+            print(f"Resolving up to {total_trade_volume:.2f} units of imbalance.")
+        
         trades_executed = []
         for buyer_idx, buyer in buyers.iterrows():
             deficit = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
@@ -501,7 +517,6 @@ class obamodel:
             print(f"Average Trade Cost: ${trades_df['Total Cost'].mean():,.2f}")
         else:
             print("No profitable trades were executed.")
-
 
     def _update_trade_positions(self, buyer_idx: int, seller_idx: int, 
                               trade_volume: float, trade_cost: float, year: int) -> None:
@@ -656,68 +671,68 @@ class obamodel:
     # 5. Scenario Analysis
     
     def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
-                         abatement_cost_curve: pd.DataFrame, start_year: int, 
-                         end_year: int, output_dir: str = "scenario_results") -> None:
-        """Run model for all scenarios with proper result handling."""
-        import os
-        
-        # Load and validate scenarios
-        scenarios = self.load_all_scenarios(scenario_file)
-        
-        # Create output directory
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Track scenario results
-        scenario_results = []
-        
-        for scenario in scenarios:
-            scenario_name = scenario["name"].replace(" ", "_").lower()
-            print(f"\nRunning Scenario: {scenario['name']}")
-            print(f"Benchmark Ratchet Rate: {scenario['benchmark_ratchet_rate']:.4f}")
+                             abatement_cost_curve: pd.DataFrame, start_year: int, 
+                             end_year: int, output_dir: str = "scenario_results") -> None:
+            """Run model for all scenarios with proper result handling."""
+            import os
             
-            try:
-               # Initialize new model instance for each scenario
-                model = obamodel(
-                    facilities_data=facilities_data.copy(),
-                    abatement_cost_curve=abatement_cost_curve.copy(),
-                    start_year=start_year,
-                    end_year=end_year,
-                    scenario_params=scenario
-                )
+            # Load and validate scenarios
+            scenarios = self.load_all_scenarios(scenario_file)
+            
+            # Create output directory
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Track scenario results
+            scenario_results = []
+            
+            for scenario in scenarios:
+                scenario_name = scenario["name"].replace(" ", "_").lower()
+                print(f"\nRunning Scenario: {scenario['name']}")
+                print(f"Benchmark Ratchet Rate: {scenario['benchmark_ratchet_rate']:.4f}")
                 
-                # Run model
-                market_summary, facility_results = model.run_model()
-                
-                # Add scenario identifier
-                market_summary['Scenario'] = scenario['name']
-                facility_results['Scenario'] = scenario['name']
-                
-                # Save scenario results
-                market_summary.to_csv(
-                    os.path.join(output_dir, f"{scenario_name}_market_summary.csv"), 
-                    index=False
-                )
-                facility_results.to_csv(
-                    os.path.join(output_dir, f"{scenario_name}_facility_results.csv"), 
-                    index=False
-                )
-                
-                # Store results for comparison
-                scenario_results.append({
-                    'name': scenario['name'],
-                    'market_summary': market_summary,
-                    'facility_results': facility_results
-                })
-                
-                print(f"Results saved for scenario: {scenario['name']}")
-                
-            except Exception as e:
-                print(f"Error in scenario {scenario['name']}: {e}")
-                continue
-        
-        # Create summary comparison
-        self._save_scenario_comparison(scenario_results, output_dir)
-        print("\nScenario analysis complete.")
+                try:
+                   # Initialize new model instance for each scenario
+                    model = obamodel(
+                        facilities_data=facilities_data.copy(),
+                        abatement_cost_curve=abatement_cost_curve.copy(),
+                        start_year=start_year,
+                        end_year=end_year,
+                        scenario_params=scenario
+                    )
+                    
+                    # Run model
+                    market_summary, facility_results = model.run_model()
+                    
+                    # Add scenario identifier
+                    market_summary['Scenario'] = scenario['name']
+                    facility_results['Scenario'] = scenario['name']
+                    
+                    # Save scenario results
+                    market_summary.to_csv(
+                        os.path.join(output_dir, f"{scenario_name}_market_summary.csv"), 
+                        index=False
+                    )
+                    facility_results.to_csv(
+                        os.path.join(output_dir, f"{scenario_name}_facility_results.csv"), 
+                        index=False
+                    )
+                    
+                    # Store results for comparison
+                    scenario_results.append({
+                        'name': scenario['name'],
+                        'market_summary': market_summary,
+                        'facility_results': facility_results
+                    })
+                    
+                    print(f"Results saved for scenario: {scenario['name']}")
+                    
+                except Exception as e:
+                    print(f"Error in scenario {scenario['name']}: {e}")
+                    continue
+            
+            # Create summary comparison
+            self._save_scenario_comparison(scenario_results, output_dir)
+            print("\nScenario analysis complete.")
     
     def _save_scenario_comparison(self, scenario_results: List[Dict], output_dir: str) -> None:
         """Create and save scenario comparison."""
