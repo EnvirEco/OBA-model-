@@ -8,14 +8,14 @@ def run_scenario_analysis():
     """Run all scenarios and save results."""
     print("Starting scenario analysis...")
     
-    # Get the base directory
-    base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    # Get the base directory - adjust this to your setup
+    base_dir = Path(r"C:\Users\user\AppData\Local\Programs\Python\Python313\OBA_test")
     print(f"Base directory: {base_dir}")
     
-    # Define file paths with correct filename
-    scenario_file = base_dir / "scenarios" / "scenarios.csv"
-    facilities_file = base_dir / "data" / "facilities_data.csv"
-    abatement_file = base_dir / "data" / "abatement_cost_curve.csv"  # Fixed filename
+    # Define file paths based on your directory structure
+    scenario_file = base_dir / "data" / "input" / "scenarios" / "scenarios.csv"
+    facilities_file = base_dir / "data" / "input" / "facilities" / "facilities_data.csv"
+    abatement_file = base_dir / "data" / "input" / "facilities" / "abatement_cost_curve.csv"
     
     print("\nAttempting to load files from:")
     print(f"Scenarios: {scenario_file}")
@@ -29,7 +29,7 @@ def run_scenario_analysis():
             return None
     
     # Create results directory if it doesn't exist
-    results_dir = base_dir / "results"
+    results_dir = base_dir / "data" / "output" / "results"
     results_dir.mkdir(exist_ok=True)
     
     # Load input data
@@ -66,10 +66,14 @@ def run_scenario_analysis():
         try:
             print(f"\nRunning scenario: {scenario['name']}")
             
+            # Create scenario-specific output directory
+            scenario_dir = base_dir / "data" / "output" / "scenario_results" / scenario['name'].replace(" ", "_").lower()
+            scenario_dir.mkdir(exist_ok=True, parents=True)
+            
             # Initialize model
             model = obamodel(
-                facilities_data=facilities_data,
-                abatement_cost_curve=abatement_cost_curve,
+                facilities_data=facilities_data.copy(),  # Added .copy() to prevent modifications
+                abatement_cost_curve=abatement_cost_curve.copy(),
                 start_year=start_year,
                 end_year=end_year,
                 scenario_params=scenario
@@ -79,9 +83,8 @@ def run_scenario_analysis():
             market_summary, facility_results = model.run_model()
             
             # Save results
-            scenario_name = scenario['name'].replace(" ", "_").lower()
-            market_summary.to_csv(results_dir / f"{scenario_name}_market_summary.csv", index=False)
-            facility_results.to_csv(results_dir / f"{scenario_name}_facility_results.csv", index=False)
+            market_summary.to_csv(scenario_dir / "market_summary.csv", index=False)
+            facility_results.to_csv(scenario_dir / "facility_results.csv", index=False)
             
             print(f"Results saved for scenario: {scenario['name']}")
             
