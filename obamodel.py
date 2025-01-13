@@ -115,6 +115,11 @@ class obamodel:
         if facility_ids != abatement_ids:
             raise ValueError("Mismatch between facility IDs in data and abatement curves")
 
+        print("\nBaseline Benchmark Validation:")
+        print(self.facilities_data[['Facility ID', 'Baseline Benchmark']].to_string())
+        print("\nUnique Baseline Benchmarks:", 
+              self.facilities_data['Baseline Benchmark'].unique())
+    
     def _initialize_columns(self) -> None:
         """Initialize all required columns without fragmentation."""
         metrics = [
@@ -181,6 +186,33 @@ class obamodel:
             self.facilities_data[f'Output_{year}'] * 
             emissions_intensity
         ).clip(lower=0)
+                
+        print(f"\n=== Dynamic Value Analysis for Year {year} ===")
+    
+        # Store initial values
+        initial_benchmarks = self.facilities_data['Baseline Benchmark'].copy()
+        
+        # Calculate benchmarks facility by facility
+        for idx, facility in self.facilities_data.iterrows():
+            # Ensure facility-specific benchmark calculation
+            self.facilities_data.at[idx, f'Benchmark_{year}'] = (
+                facility['Baseline Benchmark'] * 
+                (1 - self.benchmark_ratchet_rate) ** years_elapsed
+            )
+        
+        # Verify after calculation
+        print("\nBenchmark Verification:")
+        print(self.facilities_data[['Facility ID', 'Baseline Benchmark', f'Benchmark_{year}']].to_string())
+        
+        unique_initial = len(initial_benchmarks.unique())
+        unique_current = len(self.facilities_data[f'Benchmark_{year}'].unique())
+        
+        print(f"\nUnique Benchmarks:")
+        print(f"Initial: {unique_initial}")
+        print(f"Current: {unique_current}")
+    
+        if unique_initial != unique_current:
+            print("WARNING: Lost facility-specific benchmarks!")
         
         # Calculate required allocations to meet surplus constraint
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
@@ -234,6 +266,14 @@ class obamodel:
         print(f"Adjustment: {adjustment:.4f}")
         print(f"New Rate: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
       
+    def check_benchmark_preservation(self, year: int) -> None:
+        """Check if benchmarks maintain facility-specific values."""
+        print(f"\n=== Benchmark Preservation Check for Year {year} ===")
+        print("\nAfter Initial Calculation:")
+        for idx, facility in self.facilities_data.iterrows():
+            print(f"Facility {facility['Facility ID']}: {self.facilities_data.at[idx, f'Benchmark_{year}']:.4f}")
+        
+       
     def calculate_dynamic_allowance_surplus_deficit(self, year: int) -> Tuple[float, float]:
         """Calculate supply and demand for a given year."""
         self.calculate_dynamic_values(year)
@@ -469,6 +509,13 @@ class obamodel:
         print(f"Total Surplus: {sellers[f'Allowance Surplus/Deficit_{year}'].sum():,.2f}")
         
         return positions                         
+
+    # After major operations
+    def _check_benchmarks():
+        unique_benchmarks = self.facilities_data[f'Benchmark_{year}'].unique()
+        print(f"\nUnique Benchmarks: {unique_benchmarks}")
+        if len(unique_benchmarks) == 1:
+            print("WARNING: All facilities have same benchmark!")
             
     # 3. Cost and Performance Calculations
     def calculate_costs(self, year: int) -> None:
@@ -549,7 +596,7 @@ class obamodel:
         return market_summary_df, facility_results
 
     def _prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
-        """Prepare facility results in long format."""
+        """Prepare facility results with benchmark verification."""
         results = []
         
         metrics = [
@@ -561,15 +608,34 @@ class obamodel:
         ]
         
         for year in range(start_year, end_year + 1):
+            # Verify benchmarks before preparing results
+            unique_benchmarks = len(self.facilities_data[f'Benchmark_{year}'].unique())
+            print(f"\nYear {year} Benchmarks before preparation:")
+            print(f"Number of unique benchmarks: {unique_benchmarks}")
+            print(self.facilities_data[['Facility ID', f'Benchmark_{year}']].to_string())
+            
             year_data = self.facilities_data[['Facility ID'] + 
                 [f'{metric}_{year}' for metric in metrics]].copy()
             
             # Remove year suffix from column names
             year_data.columns = ['Facility ID'] + metrics
             year_data['Year'] = year
+            
+            # Verify after preparation
+            print(f"\nYear {year} Benchmarks after preparation:")
+            print(year_data[['Facility ID', 'Benchmark']].to_string())
+            
             results.append(year_data)
         
-        return pd.concat(results, ignore_index=True)
+        final_results = pd.concat(results, ignore_index=True)
+        
+        # Final verification
+        print("\nFinal Results Benchmark Check:")
+        for year in range(start_year, end_year + 1):
+            year_data = final_results[final_results['Year'] == year]
+            print(f"\nYear {year} unique benchmarks: {len(year_data['Benchmark'].unique())}")
+        
+        return final_results
 
     def save_results(self, market_summary: pd.DataFrame, facility_results: pd.DataFrame, 
                     output_file: str) -> None:
@@ -637,7 +703,22 @@ class obamodel:
                 market_summary['Scenario'] = scenario['name']
                 facility_results['Scenario'] = scenario['name']
                 
-                # Save scenario results
+            # Check benchmarks for this scenario
+                for year in range(start_year, end_year + 1):
+                    year_data = facility_results[facility_results['Year'] == year]
+                    benchmark_comparison = pd.concat([
+                        benchmark_comparison,
+                        pd.DataFrame({
+                            'Scenario': scenario['name'],
+                            'Year': year,
+                            'Min Benchmark': year_data['Benchmark'].min(),
+                            'Max Benchmark': year_data['Benchmark'].max(),
+                            'Unique Benchmarks': len(year_data['Benchmark'].unique()),
+                            'Ratchet Rate': scenario['benchmark_ratchet_rate']
+                        }, index=[0])
+                    ])
+                
+            # Save scenario results
                 market_summary.to_csv(
                     os.path.join(output_dir, f"{scenario_name}_market_summary.csv"), 
                     index=False
@@ -660,9 +741,13 @@ class obamodel:
                 print(f"Error in scenario {scenario['name']}: {e}")
                 continue
         
-        # Create summary comparison
-        self._save_scenario_comparison(scenario_results, output_dir)
-        print("\nScenario analysis complete.")
+            # Save benchmark comparison
+            benchmark_comparison.to_csv(os.path.join(output_dir, 'benchmark_comparison.csv'), index=False)
+
+            # Create summary comparison
+            self._save_scenario_comparison(scenario_results, output_dir)
+            print("\nScenario analysis complete.")
+                    
     
     def _save_scenario_comparison(self, scenario_results: List[Dict], output_dir: str) -> None:
         """Create and save scenario comparison."""
