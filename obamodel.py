@@ -308,22 +308,7 @@ class obamodel:
             print(f"Surplus Change: {surplus_change:.4f}")
             print(f"Current Surplus Ratio: {surplus_ratio:.4f}")
 
-    def adjust_benchmark_rate(self, year: int) -> None:
-        """Adjust benchmark ratchet rate to maintain target surplus ratio."""
-        if year <= self.start_year + 2:
-            # Not enough data for a 3-year rolling average
-            return
-        
-           
-        # Update and enforce bounds
-        self.facilities_data['Benchmark Ratchet Rate'] += adjustment
-        self.facilities_data['Benchmark Ratchet Rate'] = np.clip(
-            self.facilities_data['Benchmark Ratchet Rate'], 0.01, 0.20
-        )
-        print(f"  Adjusted Benchmark Ratchet Rate: {self.facilities_data['Benchmark Ratchet Rate'].mean():.4f}")
-
-
-      
+     
     def calculate_dynamic_allowance_surplus_deficit(self, year: int) -> Tuple[float, float]:
         """Calculate supply and demand for a given year."""
         self.calculate_dynamic_values(year)
@@ -602,9 +587,7 @@ class obamodel:
             self.calculate_abatement(year)
             self.trade_allowances(year)
             
-            # Adjust benchmark rate based on rolling surplus ratio
-            self.adjust_benchmark_rate(year)
-            
+                      
             # Cost calculations
             self.calculate_costs(year)
             self.calculate_cost_ratios(year)
@@ -787,8 +770,7 @@ class obamodel:
         return results
         
     def _create_market_summary(self, year: int) -> Dict:
-        """Create market summary dictionary for a specific year with rolling average adjustments."""
-        
+                
         # Ensure that surplus and deficit are calculated before calling this method
         if f'Allowance Surplus/Deficit_{year}' not in self.facilities_data.columns:
             raise KeyError(f"'Allowance Surplus/Deficit_{year}' is missing. Ensure surplus/deficit is calculated before calling _create_market_summary.")
