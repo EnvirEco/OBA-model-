@@ -201,7 +201,7 @@ class obamodel:
     
   
     # 2. Core Market Mechanisms
-      def run_model(self, output_file: str = "results.csv") -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def run_model(self, output_file: str = "results.csv") -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Run the complete model simulation with proper market sequence."""
         print("Running emissions trading model...")
         market_summary = []
@@ -445,53 +445,53 @@ class obamodel:
     
     # 4. Model Execution and Results
     def prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
-    """
-    Prepare facility-level results in long format with all metrics.
-    
-    Args:
-        start_year: First year of simulation period
-        end_year: Last year of simulation period
+        """
+        Prepare facility-level results in long format with all metrics.
         
-    Returns:
-        DataFrame with facility results across all years
-    """
-    # Define core metrics to track
-    metrics = [
-        "Output", "Emissions", "Benchmark", "Allocations",
-        "Allowance Surplus/Deficit", "Tonnes Abated", "Abatement Cost",
-        "Trade Volume", "Trade Cost", "Allowance Purchase Cost",
-        "Allowance Sales Revenue", "Compliance Cost", "Total Cost",
-        "Cost to Profit Ratio", "Cost to Output Ratio"
-    ]
-    
-    results = []
-    for year in range(start_year, end_year + 1):
-        # Extract year-specific data
-        year_data = self.facilities_data[
-            ['Facility ID'] + [f'{metric}_{year}' for metric in metrics]
-        ].copy()
+        Args:
+            start_year: First year of simulation period
+            end_year: Last year of simulation period
+            
+        Returns:
+            DataFrame with facility results across all years
+        """
+        # Define core metrics to track
+        metrics = [
+            "Output", "Emissions", "Benchmark", "Allocations",
+            "Allowance Surplus/Deficit", "Tonnes Abated", "Abatement Cost",
+            "Trade Volume", "Trade Cost", "Allowance Purchase Cost",
+            "Allowance Sales Revenue", "Compliance Cost", "Total Cost",
+            "Cost to Profit Ratio", "Cost to Output Ratio"
+        ]
         
-        # Clean column names and add year
-        year_data.columns = ['Facility ID'] + metrics
-        year_data['Year'] = year
-        results.append(year_data)
-    
-    # Combine all years into single DataFrame
-    combined_results = pd.concat(results, ignore_index=True)
-    
-    # Add additional identifier columns if available
-    if 'Sector' in self.facilities_data.columns:
-        sector_map = self.facilities_data[['Facility ID', 'Sector']].set_index('Facility ID')
-        combined_results = combined_results.merge(
-            sector_map, on='Facility ID', how='left'
-        )
-    
-    print(f"\nPrepared facility results:")
-    print(f"Years: {start_year}-{end_year}")
-    print(f"Facilities: {len(self.facilities_data)}")
-    print(f"Total records: {len(combined_results)}")
-    
-    return combined_results
+        results = []
+        for year in range(start_year, end_year + 1):
+            # Extract year-specific data
+            year_data = self.facilities_data[
+                ['Facility ID'] + [f'{metric}_{year}' for metric in metrics]
+            ].copy()
+            
+            # Clean column names and add year
+            year_data.columns = ['Facility ID'] + metrics
+            year_data['Year'] = year
+            results.append(year_data)
+        
+        # Combine all years into single DataFrame
+        combined_results = pd.concat(results, ignore_index=True)
+        
+        # Add additional identifier columns if available
+        if 'Sector' in self.facilities_data.columns:
+            sector_map = self.facilities_data[['Facility ID', 'Sector']].set_index('Facility ID')
+            combined_results = combined_results.merge(
+                sector_map, on='Facility ID', how='left'
+            )
+        
+        print(f"\nPrepared facility results:")
+        print(f"Years: {start_year}-{end_year}")
+        print(f"Facilities: {len(self.facilities_data)}")
+        print(f"Total records: {len(combined_results)}")
+        
+        return combined_results
 
     def save_results(self, market_summary: pd.DataFrame, facility_results: pd.DataFrame, 
                     output_file: str, output_dir: str = ".") -> None:
@@ -599,7 +599,7 @@ class obamodel:
         return report
 
     #sensitivity testing 
-     def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
+    def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
                          abatement_cost_curve: pd.DataFrame, start_year: int, 
                          end_year: int, output_dir: str = "scenario_results") -> pd.DataFrame:
         """
