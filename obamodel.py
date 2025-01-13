@@ -90,8 +90,6 @@ class obamodel:
         self._initialize_columns()
         self._validate_input_data()
 
-
-         
     def _validate_input_data(self) -> None:
         """Validate input data structure and relationships."""
         required_facility_cols = {
@@ -153,15 +151,25 @@ class obamodel:
 
     # 2. Core Market Mechanisms
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values for a given year."""
+        """Calculate dynamic values with improved tracking of market metrics."""
         years_elapsed = year - self.start_year
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
-        print(f"Years elapsed: {years_elapsed}")
+        
+        # First ensure all required columns exist for this year
+        required_columns = [
+            f'Emissions_{year}', f'Output_{year}', f'Benchmark_{year}',
+            f'Allocations_{year}', f'Allowance Surplus/Deficit_{year}',
+            f'Surplus Ratio_{year}', f'Rolling Average Surplus_{year}'
+        ]
+        
+        for col in required_columns:
+            if col not in self.facilities_data.columns:
+                self.facilities_data[col] = 0.0
         
         # Calculate emissions intensity
         if year > self.start_year:
             prior_emissions = self.facilities_data[f'Emissions_{year - 1}']
-            prior_abatement = self.facilities_data[f'Tonnes Abated_{year - 1}']
+            prior_abatement = self.facilities_data.get(f'Tonnes Abated_{year - 1}', 0)  # Handle optional column
             prior_output = self.facilities_data[f'Output_{year - 1}']
             emissions_intensity = (prior_emissions - prior_abatement) / prior_output
         else:
@@ -175,58 +183,99 @@ class obamodel:
             self.facilities_data['Baseline Output'] *
             (1 + self.output_growth_rate) ** years_elapsed
         )
+        
         self.facilities_data[f'Emissions_{year}'] = (
             self.facilities_data[f'Output_{year}'] * emissions_intensity
         ).clip(lower=0)
         
-        # Calculate total emissions and target allocations
+        # Calculate total required allocations to achieve target surplus
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
-        target_allocations = total_emissions / (1 - self.target_surplus_ratio)
-        remaining_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-        
-        # Calculate surplus ratio
-        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-        surplus_ratio = remaining_surplus / total_allocations if total_allocations > 0 else 0.0
-    
-        # Rolling average surplus ratio
-        if year >= self.start_year + 2:
-            rolling_surplus_ratios = [
-                self.facilities_data.get(f'Surplus Ratio_{yr}', 0.0)
-                for yr in range(year - 2, year)
-            ]
-            rolling_average_surplus = np.mean(rolling_surplus_ratios)
-        else:
-            rolling_average_surplus = self.target_surplus_ratio  
-      
-      # Default for initial years# Calculate required benchmark
         total_output = self.facilities_data[f'Output_{year}'].sum()
-        required_benchmark = target_allocations / total_output
         
-        # Update benchmark and allocations
+        # Calculate required allocations with buffer to ensure no deficits
+        required_allocations = total_emissions / (1 - self.target_surplus_ratio)
+        
+        # Calculate and set benchmark
+        required_benchmark = required_allocations / total_output
         self.facilities_data[f'Benchmark_{year}'] = required_benchmark
+        
+        # Calculate allocations
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * required_benchmark
         )
-    
-        # Calculate remaining surplus/deficit
+        
+        # Calculate surplus/deficit
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
+        
+        # Calculate current surplus metrics
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
         remaining_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
+        current_surplus_ratio = remaining_surplus / total_allocations if total_allocations > 0 else 0.0
         
-        # Calculate surplus ratio for the current year
-        if total_allocations := self.facilities_data[f'Allocations_{year}'].sum():
-            surplus_ratio = remaining_surplus / total_allocations
+        # Store the current surplus ratio
+        self.facilities_data[f'Surplus Ratio_{year}'] = current_surplus_ratio
+        
+        # Calculate rolling average with proper initialization
+        if year >= self.start_year + 2:
+            recent_years = range(year - 2, year + 1)
+            historical_ratios = []
+            
+            for y in recent_years:
+                ratio_col = f'Surplus Ratio_{y}'
+                if ratio_col in self.facilities_data.columns:
+                    ratio = self.facilities_data[ratio_col].mean()
+                else:
+                    ratio = self.target_surplus_ratio  # Use target for missing historical data
+                historical_ratios.append(ratio)
+            
+            rolling_avg = sum(historical_ratios) / len(historical_ratios)
         else:
-            surplus_ratio = 0.0  # Avoid division by zero
+            # For early years, use target ratio
+            rolling_avg = self.target_surplus_ratio
         
-        self.facilities_data[f'Surplus Ratio_{year}'] = surplus_ratio
+        # Store rolling average
+        self.facilities_data[f'Rolling Average Surplus_{year}'] = rolling_avg
         
-        print(f"Year {year} - Remaining Surplus: {remaining_surplus:.2f}")
-        print(f"Year {year} - Total Allocations: {total_allocations:.2f}")
-        print(f"Year {year} - Surplus Ratio: {surplus_ratio:.4f}")
-
+        # Print market status
+        print(f"\nMarket Status for Year {year}:")
+        print(f"Total Emissions: {total_emissions:,.2f}")
+        print(f"Total Allocations: {total_allocations:,.2f}")
+        print(f"Remaining Surplus: {remaining_surplus:,.2f}")
+        print(f"Current Surplus Ratio: {current_surplus_ratio:.4f}")
+        print(f"Rolling Average Surplus: {rolling_avg:.4f}")
+    
+    
+    def analyze_market_positions(self, year: int) -> pd.DataFrame:
+        """Analyze market positions with improved surplus tracking."""
+        print(f"\n=== Market Position Analysis for Year {year} ===")
+        
+        positions = self.facilities_data[[
+            'Facility ID',
+            f'Allocations_{year}',
+            f'Emissions_{year}',
+            f'Allowance Surplus/Deficit_{year}'
+        ]].copy()
+        
+        # Classify positions
+        surplus_positions = positions[positions[f'Allowance Surplus/Deficit_{year}'] > 0]
+        deficit_positions = positions[positions[f'Allowance Surplus/Deficit_{year}'] < 0]
+        
+        total_allocations = positions[f'Allocations_{year}'].sum()
+        total_surplus = surplus_positions[f'Allowance Surplus/Deficit_{year}'].sum()
+        total_deficit = abs(deficit_positions[f'Allowance Surplus/Deficit_{year}'].sum())
+        
+        print("\nMarket Balance:")
+        print(f"Total Allocations: {total_allocations:,.2f}")
+        print(f"Number of Sellers (Surplus): {len(surplus_positions)}")
+        print(f"Total Surplus: {total_surplus:,.2f}")
+        print(f"Number of Buyers (Deficit): {len(deficit_positions)}")
+        print(f"Total Deficit: {total_deficit:,.2f}")
+        print(f"Surplus Ratio: {(total_surplus/total_allocations if total_allocations > 0 else 0):.4f}")
+        
+        return positions
 
     def adjust_benchmark_rate(self, year: int) -> None:
         """Adjust benchmark ratchet rate to maintain target surplus ratio."""
