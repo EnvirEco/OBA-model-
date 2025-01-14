@@ -394,6 +394,7 @@ class obamodel:
         print(f"MAC Curve: Min=${min(mac_points):.2f}, Max=${max(mac_points):.2f}, Points={len(mac_points)}")
         
         return mac_points
+        
     def calculate_abatement(self, year: int) -> None:
         """Calculate and apply optimal abatement based on price signal."""
         print(f"\n=== Abatement Analysis for Year {year} ===")
@@ -440,6 +441,31 @@ class obamodel:
         print(f"  Volume: {total_abatement:.2f}")
         print(f"  Price: ${self.market_price:.2f}")
 
+    def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
+        """
+        Apply abatement results to the facility's data.
+        
+        Args:
+            idx: Index of facility in facilities_data
+            abated: Amount of emissions abated
+            cost: Total cost of abatement
+            year: Year being processed
+        """
+        # Update abatement amount
+        self.facilities_data.at[idx, f'Tonnes Abated_{year}'] += abated
+        
+        # Update abatement cost
+        self.facilities_data.at[idx, f'Abatement Cost_{year}'] += cost
+        
+        # Update allowance position
+        self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += abated
+    
+        # Log updates for debugging
+        print(f"\nFacility {self.facilities_data.at[idx, 'Facility ID']} - Year {year}:")
+        print(f"  Abated: {abated:.2f}")
+        print(f"  Cost: ${cost:.2f}")
+        print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
+    
     def trade_allowances(self, year: int) -> None:
         """Execute trades at market clearing price."""
         print(f"\n=== Trading Analysis for Year {year} ===")
@@ -531,33 +557,49 @@ class obamodel:
 
     def analyze_market_stability(self, year: int) -> None:
         """Analyze market stability conditions."""
+        # Initialize variables
+        price_change = 0.0
+        surplus_change = 0.0
+        
         # Calculate market metrics
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
         surplus = total_allocations - total_emissions
         surplus_ratio = surplus / total_allocations if total_allocations > 0 else 0
         
-        # Calculate price responsiveness
+        # Calculate price responsiveness for non-base years
         if year > self.start_year:
             try:
-                price_change = (self.market_price - self.price_schedule[year-1]) / self.price_schedule[year-1]
-                surplus_change = (surplus_ratio - self.facilities_data[f'Surplus Ratio_{year-1}'].mean())
-                
-                print(f"\nMarket Stability Analysis Year {year}:")
-                print(f"Price Change: {price_change:.4f}")
-                print(f"Surplus Change: {surplus_change:.4f}")
-                print(f"Current Surplus Ratio: {surplus_ratio:.4f}")
+                # Get previous year's price from schedule
+                prev_price = self.price_schedule.get(year-1, self.floor_price)
+                if prev_price > 0:
+                    price_change = (self.market_price - prev_price) / prev_price
+                else:
+                    price_change = 0.0
+                    
+                # Calculate surplus change if previous data exists
+                if f'Surplus Ratio_{year-1}' in self.facilities_data.columns:
+                    prev_surplus = self.facilities_data[f'Surplus Ratio_{year-1}'].mean()
+                    surplus_change = surplus_ratio - prev_surplus
+                else:
+                    surplus_change = 0.0
+                    
             except Exception as e:
-                print(f"Warning: Could not calculate all stability metrics for year {year}: {str(e)}")
-        else:
-            print(f"\nMarket Stability Analysis Year {year} (Base Year):")
-            print(f"Initial Surplus Ratio: {surplus_ratio:.4f}")
+                print(f"Warning: Stability calculation issue for year {year}: {str(e)}")
+                price_change = 0.0
+                surplus_change = 0.0
         
         # Store stability metrics
         self.facilities_data[f'Market_Surplus_Ratio_{year}'] = surplus_ratio
+        self.facilities_data[f'Price_Change_{year}'] = price_change
+        self.facilities_data[f'Surplus_Change_{year}'] = surplus_change
+        
+        # Print analysis
+        print(f"\nMarket Stability Analysis Year {year}:")
         if year > self.start_year:
-            self.facilities_data[f'Price_Change_{year}'] = price_change
-            self.facilities_data[f'Surplus_Change_{year}'] = surplus_change
+            print(f"Price Change: {price_change:.4f}")
+            print(f"Surplus Change: {surplus_change:.4f}")
+        print(f"Current Surplus Ratio: {surplus_ratio:.4f}")
     
     # 3. Cost and Performance Calculations
     def calculate_costs(self, year: int) -> None:
@@ -643,6 +685,59 @@ class obamodel:
         
         return combined_results
 
+    def _prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
+        """
+        Prepare facility results in long format.
+        
+        Args:
+            start_year: First year of simulation
+            end_year: Last year of simulation
+            
+        Returns:
+            DataFrame with facility results across all years
+        """
+        # Core metrics to track
+        metrics = [
+            "Output", "Emissions", "Benchmark", "Allocations",
+            "Allowance Surplus/Deficit", "Tonnes Abated", "Abatement Cost",
+            "Trade Volume", "Trade Cost", "Allowance Purchase Cost",
+            "Allowance Sales Revenue", "Compliance Cost", "Total Cost",
+            "Cost to Profit Ratio", "Cost to Output Ratio"
+        ]
+        
+        # Store results for each year
+        results = []
+        for year in range(start_year, end_year + 1):
+            # Get year-specific data
+            year_data = self.facilities_data[
+                ['Facility ID'] + [f'{metric}_{year}' for metric in metrics]
+            ].copy()
+            
+            # Remove year suffix from column names
+            year_data.columns = ['Facility ID'] + metrics
+            
+            # Add year column
+            year_data['Year'] = year
+            
+            results.append(year_data)
+        
+        # Combine all years
+        combined_results = pd.concat(results, ignore_index=True)
+        
+        # Add facility identifiers if available
+        if 'Sector' in self.facilities_data.columns:
+            sector_map = self.facilities_data[['Facility ID', 'Sector']].set_index('Facility ID')
+            combined_results = combined_results.merge(
+                sector_map, on='Facility ID', how='left'
+            )
+        
+        print(f"\nPrepared facility results:")
+        print(f"Years: {start_year}-{end_year}")
+        print(f"Facilities: {len(self.facilities_data)}")
+        print(f"Total records: {len(combined_results)}")
+        
+        return combined_results
+    
     def save_results(self, market_summary: pd.DataFrame, facility_results: pd.DataFrame, 
                     output_file: str, output_dir: str = ".") -> None:
         """
