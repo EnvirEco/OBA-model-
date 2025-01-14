@@ -64,10 +64,15 @@ class obamodel:
   
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
                  start_year: int, end_year: int, scenario_params: Dict):
-        """Initialize OBA model with sector-specific configuration."""
-        # Validate sector data
-        if 'Sector' not in facilities_data.columns:
-            raise ValueError("Facilities data must include 'Sector' column")
+        """Initialize OBA model with facility-specific benchmarks."""
+        # Validate required columns
+        required_cols = [
+            'Facility ID', 'Sector', 'Baseline Output', 'Baseline Emissions',
+            'Baseline Benchmark', 'Benchmark Ratchet Rate'
+        ]
+        missing_cols = [col for col in required_cols if col not in facilities_data.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
         
         # Store base data
         self.facilities_data = facilities_data.copy()
@@ -80,81 +85,38 @@ class obamodel:
         self.ceiling_price = scenario_params.get("ceiling_price", 200)
         self.price_increment = scenario_params.get("price_increment", 5)
         
-        # Get sector-specific parameters if provided, otherwise use defaults
-        self.sector_params = scenario_params.get("sector_params", {})
-        
-        # Initialize sector benchmarks
-        self.sector_benchmarks = self._initialize_sector_benchmarks()
-        
-        # Initialize other parameters
-        self._initialize_model_parameters(scenario_params)
-
-        # Initialize price parameters
-        self.floor_price = scenario_params.get("floor_price", 20)
-        self.ceiling_price = scenario_params.get("ceiling_price", 200)
-        self.price_increment = scenario_params.get("price_increment", 5)
-        
         # Initialize price schedule
         self.price_schedule = {
-            year: self.floor_price + self.price_increment * (year - start_year)
+            year: min(self.floor_price + self.price_increment * (year - start_year), 
+                     self.ceiling_price)
             for year in range(start_year, end_year + 1)
         }
         
-        # Cap prices at ceiling
-        self.price_schedule = {
-            year: min(price, self.ceiling_price)
-            for year, price in self.price_schedule.items()
-        }
+        # Growth rates
+        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
+        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
         
-        print("\nInitialized Price Schedule:")
-        for year, price in self.price_schedule.items():
-            print(f"Year {year}: ${price:.2f}")              
-            
-        print("\nInitialized sectors and benchmarks:")
-        for sector, benchmark in self.sector_benchmarks.items():
-            print(f"{sector}: {benchmark:.6f}")
-
-    def _initialize_sector_benchmarks(self) -> Dict[str, float]:
-        """Initialize sector-specific benchmarks using chosen methodology."""
-        benchmarks = {}
+        # MSR parameters
+        self.msr_active = scenario_params.get("msr_active", False)
+        self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
+        self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
+        self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
         
-        # Get benchmark setting method from scenario parameters
-        method = self.sector_params.get('benchmark_method', 'percentile')
+        # Initialize model columns
+        self._initialize_columns()
         
-        for sector in self.facilities_data['Sector'].unique():
-            # Get sector data
-            sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
-            
-            # Get sector-specific parameters
-            sector_config = self.sector_params.get(sector, {})
-            
-            # Calculate benchmark based on method
-            if method == 'top_performer':
-                percentile = sector_config.get('top_percentile', 0.1)  # Default top 10%
-                benchmark = self.calculate_sector_benchmark_top_performer(sector_data, percentile)
-                
-            elif method == 'percentile':
-                target_percentile = sector_config.get('target_percentile', 0.8)  # Default 80th
-                benchmark = self.calculate_sector_benchmark_percentile(sector_data, target_percentile)
-                
-            elif method == 'top_average':
-                top_n = sector_config.get('top_n', 3)  # Default top 3
-                benchmark = self.calculate_sector_benchmark_top_average(sector_data, top_n)
-                
-            else:
-                raise ValueError(f"Unknown benchmark method: {method}")
-                
-            # Store benchmark
-            benchmarks[sector] = benchmark
-            
-            # Log details
-            print(f"\nSector: {sector}")
-            print(f"  Method: {method}")
-            print(f"  Benchmark: {benchmark:.6f}")
-            print(f"  Sector Size: {len(sector_data)} facilities")
-            
-        return benchmarks
-
+        print("\nModel Initialized:")
+        print(f"Time period: {start_year} - {end_year}")
+        print(f"Price range: ${self.floor_price} - ${self.ceiling_price}")
+        print(f"Number of facilities: {len(facilities_data)}")
+        print("\nSector Summary:")
+        sector_summary = facilities_data.groupby('Sector').agg({
+            'Baseline Benchmark': 'mean',
+            'Benchmark Ratchet Rate': 'mean'
+        })
+        print(sector_summary.to_string())
+    
+  
     def analyze_benchmark_coverage(self, sector: str, benchmark: float) -> None:
         """Analyze how many facilities meet the benchmark."""
         sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
@@ -173,17 +135,7 @@ class obamodel:
         # Base parameters
         self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
         self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
-        
-        # Get sector-specific ratchet rates or use default
-        self.benchmark_ratchet_rates = {}
-        default_ratchet = scenario_params.get("benchmark_ratchet_rate", 0.03)
-        
-        for sector in self.facilities_data['Sector'].unique():
-            sector_config = self.sector_params.get(sector, {})
-            self.benchmark_ratchet_rates[sector] = sector_config.get(
-                'ratchet_rate', default_ratchet
-            )
-        
+             
         # MSR parameters
         self.msr_active = scenario_params.get("msr_active", False)
         self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
@@ -388,163 +340,8 @@ class obamodel:
             
         return result
         
-    def calculate_sector_benchmark_percentile(self, sector_data: pd.DataFrame, percentile: float = 0.8) -> float:
-        """
-        Calculate sector benchmark based on specified percentile.
-        
-        Args:
-            sector_data: DataFrame containing sector facility data
-            percentile: Target percentile (default: 0.8 for 80th percentile)
-            
-        Returns:
-            float: Calculated benchmark value
-        """
-        # Calculate facility-level emission intensities
-        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
-        
-        # Get specified percentile
-        benchmark = intensities.quantile(percentile)
-        
-        print(f"\nPercentile Benchmark Calculation:")
-        print(f"Number of facilities: {len(sector_data)}")
-        print(f"Target percentile: {percentile}")
-        print(f"Resulting benchmark: {benchmark:.6f}")
-        
-        return benchmark
-
-    def calculate_sector_benchmark_top_performer(self, sector_data: pd.DataFrame, percentile: float = 0.1) -> float:
-        """
-        Calculate sector benchmark based on top performers.
-        
-        Args:
-            sector_data: DataFrame containing sector facility data
-            percentile: Top performer percentile (default: 0.1 for top 10%)
-            
-        Returns:
-            float: Calculated benchmark value
-        """
-        # Calculate facility-level emission intensities
-        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
-        
-        # Get top percentile performer
-        benchmark = intensities.quantile(percentile)
-        
-        print(f"\nTop Performer Benchmark Calculation:")
-        print(f"Number of facilities: {len(sector_data)}")
-        print(f"Top performer percentile: {percentile}")
-        print(f"Resulting benchmark: {benchmark:.6f}")
-        
-        return benchmark
-
-    def calculate_sector_benchmark_top_average(self, sector_data: pd.DataFrame, top_n: int = 3) -> float:
-        """
-        Calculate sector benchmark based on average of top N performers.
-        
-        Args:
-            sector_data: DataFrame containing sector facility data
-            top_n: Number of top performers to average (default: 3)
-            
-        Returns:
-            float: Calculated benchmark value
-        """
-        # Calculate facility-level emission intensities
-        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
-        
-        # Get average of top N performers
-        top_performers = intensities.nsmallest(min(top_n, len(sector_data)))
-        benchmark = top_performers.mean()
-        
-        print(f"\nTop Average Benchmark Calculation:")
-        print(f"Number of facilities: {len(sector_data)}")
-        print(f"Number of top performers used: {len(top_performers)}")
-        print(f"Resulting benchmark: {benchmark:.6f}")
-        
-        return benchmark
-
-    def calculate_sector_benchmark_weighted(self, sector_data: pd.DataFrame, weight_col: str = 'Baseline Output') -> float:
-        """
-        Calculate sector benchmark based on weighted average.
-        
-        Args:
-            sector_data: DataFrame containing sector facility data
-            weight_col: Column to use for weighting (default: 'Baseline Output')
-            
-        Returns:
-            float: Calculated benchmark value
-        """
-        # Calculate weighted average intensity
-        total_emissions = sector_data['Baseline Emissions'].sum()
-        total_weight = sector_data[weight_col].sum()
-        
-        benchmark = total_emissions / total_weight if total_weight > 0 else 0
-        
-        print(f"\nWeighted Average Benchmark Calculation:")
-        print(f"Number of facilities: {len(sector_data)}")
-        print(f"Weight column: {weight_col}")
-        print(f"Resulting benchmark: {benchmark:.6f}")
-        
-        return benchmark
-
-    def calculate_sector_benchmark_fallback(self, sector_data: pd.DataFrame) -> float:
-        """
-        Calculate fallback benchmark when other methods not applicable.
-        
-        Args:
-            sector_data: DataFrame containing sector facility data
-            
-        Returns:
-            float: Calculated benchmark value
-        """
-        # Use simple average as fallback
-        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
-        benchmark = intensities.mean()
-        
-        print(f"\nFallback Benchmark Calculation:")
-        print(f"Number of facilities: {len(sector_data)}")
-        print(f"Resulting benchmark: {benchmark:.6f}")
-        
-        return benchmark
-
-    def get_sector_benchmark(self, sector_data: pd.DataFrame, method: str, params: Dict) -> float:
-        """
-        Get sector benchmark using specified method and parameters.
-        
-        Args:
-            sector_data: DataFrame containing sector facility data
-            method: Benchmark calculation method
-            params: Parameters for benchmark calculation
-            
-        Returns:
-            float: Calculated benchmark value
-        """
-        try:
-            if method == 'percentile':
-                percentile = params.get('target_percentile', 0.8)
-                return self.calculate_sector_benchmark_percentile(sector_data, percentile)
-                
-            elif method == 'top_performer':
-                percentile = params.get('top_percentile', 0.1)
-                return self.calculate_sector_benchmark_top_performer(sector_data, percentile)
-                
-            elif method == 'top_average':
-                top_n = params.get('top_n', 3)
-                return self.calculate_sector_benchmark_top_average(sector_data, top_n)
-                
-            elif method == 'weighted':
-                weight_col = params.get('weight_column', 'Baseline Output')
-                return self.calculate_sector_benchmark_weighted(sector_data, weight_col)
-                
-            else:
-                print(f"Warning: Unknown benchmark method '{method}'. Using fallback.")
-                return self.calculate_sector_benchmark_fallback(sector_data)
-                
-        except Exception as e:
-            print(f"Error calculating benchmark: {str(e)}")
-            print("Using fallback method.")
-            return self.calculate_sector_benchmark_fallback(sector_data)
-
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values with sector-specific benchmarks."""
+        """Calculate dynamic values using facility-specific baseline benchmarks."""
         years_elapsed = year - self.start_year
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
         print(f"MSR Status: {'Active' if self.msr_active else 'Inactive'}")
@@ -572,13 +369,13 @@ class obamodel:
             emissions_intensity
         ).clip(lower=0)
         
-        # Calculate sector-specific benchmarks
-        sector_benchmarks = self.calculate_sector_benchmarks(year)
+        # Calculate benchmarks with ratchet rate
+        self.facilities_data[f'Benchmark_{year}'] = (
+            self.facilities_data['Baseline Benchmark'] * 
+            (1 - self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
+        )
         
-        # Apply sector benchmarks to facilities
-        self.facilities_data[f'Benchmark_{year}'] = self.facilities_data['Sector'].map(sector_benchmarks)
-        
-        # Calculate allocations using sector benchmarks
+        # Calculate allocations
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * 
             self.facilities_data[f'Benchmark_{year}']
@@ -590,8 +387,8 @@ class obamodel:
         current_surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
         
         # Apply MSR adjustments if active
+        adjustment_factor = 1.0
         if self.msr_active:
-            adjustment_factor = 1.0
             if current_surplus_ratio > self.msr_upper_threshold:
                 # Too much surplus - tighten benchmarks
                 adjustment_factor = (1 + self.msr_upper_threshold) / (1 + current_surplus_ratio)
@@ -619,14 +416,29 @@ class obamodel:
         if self.msr_active:
             self.facilities_data[f'MSR_Adjustment_{year}'] = adjustment_factor
         
-        # Market status report
-        print(f"\nYear {year} Market Status:")
+        # Report results by sector
+        print("\nSector Performance:")
+        sector_results = self.facilities_data.groupby('Sector').agg({
+            f'Benchmark_{year}': 'mean',
+            f'Allocations_{year}': 'sum',
+            f'Emissions_{year}': 'sum',
+            f'Allowance Surplus/Deficit_{year}': 'sum'
+        })
+        
+        for sector in sector_results.index:
+            print(f"\n{sector}:")
+            print(f"  Average Benchmark: {sector_results.loc[sector, f'Benchmark_{year}']:.6f}")
+            print(f"  Total Allocations: {sector_results.loc[sector, f'Allocations_{year}']:,.2f}")
+            print(f"  Total Emissions: {sector_results.loc[sector, f'Emissions_{year}']:,.2f}")
+            print(f"  Net Position: {sector_results.loc[sector, f'Allowance Surplus/Deficit_{year}']:,.2f}")
+        
+        # Overall market status
+        print(f"\nOverall Market Status Year {year}:")
         print(f"Total Emissions: {total_emissions:,.2f}")
         print(f"Total Allocations: {total_allocations:,.2f}")
         print(f"Current Surplus Ratio: {current_surplus_ratio:.4f}")
         if self.msr_active:
             print(f"MSR Adjustment Factor: {adjustment_factor:.4f}")
-            
             
     def calculate_market_positions(self, year: int) -> Tuple[float, float]:
         """Calculate current market positions."""
@@ -1173,20 +985,7 @@ class obamodel:
     def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
                          abatement_cost_curve: pd.DataFrame, start_year: int, 
                          end_year: int, output_dir: str = "scenario_results") -> pd.DataFrame:
-        """
-        Run model for multiple scenarios and generate comparative analysis.
-        
-        Args:
-            scenario_file: Path to scenario configuration file
-            facilities_data: Base facility data
-            abatement_cost_curve: Abatement cost curves
-            start_year: Simulation start year
-            end_year: Simulation end year
-            output_dir: Directory for results
-            
-        Returns:
-            DataFrame with scenario comparison results
-        """
+        """Run model for multiple scenarios focusing on key parameters."""
         import os
         
         # Load and validate scenarios
@@ -1202,44 +1001,55 @@ class obamodel:
         for scenario in scenarios:
             scenario_name = scenario["name"].replace(" ", "_").lower()
             print(f"\nProcessing Scenario: {scenario['name']}")
-            print(f"Parameters:")
-            for key, value in scenario.items():
-                if key != 'name':
-                    print(f"  {key}: {value}")
+            print("Key Parameters:")
+            print(f"  Price Range: ${scenario['floor_price']} - ${scenario['ceiling_price']}")
+            print(f"  Ratchet Rate: {scenario['benchmark_ratchet_rate']:.3f}")
+            print(f"  Growth Rate: {scenario['output_growth_rate']:.3f}")
+            print(f"  MSR Active: {scenario['msr_active']}")
             
             try:
                 # Run scenario
                 result = self._run_single_scenario(
-                    scenario, facilities_data, abatement_cost_curve,
+                    scenario, facilities_data.copy(), abatement_cost_curve.copy(),
                     start_year, end_year, output_dir
                 )
                 scenario_results.append(result)
+                print(f"Results saved for scenario: {scenario['name']}")
                 
             except Exception as e:
                 print(f"Error in scenario {scenario['name']}: {str(e)}")
                 continue
         
-        # Generate comparison
+        # Create and save comparison
         comparison = self._create_scenario_comparison(scenario_results)
-        
-        # Save results
-        self._save_scenario_results(comparison, scenario_results, output_dir)
+        comparison.to_csv(os.path.join(output_dir, 'scenario_comparison.csv'), index=False)
         
         return comparison
 
     def _run_single_scenario(self, scenario: Dict, facilities_data: pd.DataFrame,
                             abatement_cost_curve: pd.DataFrame, start_year: int,
                             end_year: int, output_dir: str) -> Dict:
-        """Run a single scenario and save results."""
+        """Run a single scenario with simplified parameters."""
         scenario_name = scenario["name"].replace(" ", "_").lower()
         
-        # Initialize model for scenario
+        # Initialize model
         model = obamodel(
-            facilities_data=facilities_data.copy(),
-            abatement_cost_curve=abatement_cost_curve.copy(),
+            facilities_data=facilities_data,
+            abatement_cost_curve=abatement_cost_curve,
             start_year=start_year,
             end_year=end_year,
-            scenario_params=scenario
+            scenario_params={
+                'floor_price': scenario['floor_price'],
+                'ceiling_price': scenario['ceiling_price'],
+                'price_increment': scenario['price_increment'],
+                'output_growth_rate': scenario['output_growth_rate'],
+                'emissions_growth_rate': scenario['emissions_growth_rate'],
+                'benchmark_ratchet_rate': scenario['benchmark_ratchet_rate'],
+                'msr_active': scenario['msr_active'],
+                'msr_upper_threshold': scenario.get('msr_upper_threshold', 0.15),
+                'msr_lower_threshold': scenario.get('msr_lower_threshold', -0.05),
+                'msr_adjustment_rate': scenario.get('msr_adjustment_rate', 0.03)
+            }
         )
         
         # Run model
@@ -1249,15 +1059,22 @@ class obamodel:
         market_summary['Scenario'] = scenario['name']
         facility_results['Scenario'] = scenario['name']
         
-        # Save individual scenario results
-        self._save_scenario_files(
-            scenario_name, market_summary, facility_results, output_dir
-        )
+        # Save results
+        os.makedirs(os.path.join(output_dir, scenario_name), exist_ok=True)
+        market_summary.to_csv(os.path.join(output_dir, scenario_name, 'market_summary.csv'), index=False)
+        facility_results.to_csv(os.path.join(output_dir, scenario_name, 'facility_results.csv'), index=False)
         
         return {
             'name': scenario['name'],
             'market_summary': market_summary,
-            'facility_results': facility_results
+            'facility_results': facility_results,
+            'parameters': {
+                'floor_price': scenario['floor_price'],
+                'ceiling_price': scenario['ceiling_price'],
+                'benchmark_ratchet_rate': scenario['benchmark_ratchet_rate'],
+                'output_growth_rate': scenario['output_growth_rate'],
+                'msr_active': scenario['msr_active']
+            }
         }
 
     def _create_scenario_comparison(self, scenario_results: List[Dict]) -> pd.DataFrame:
