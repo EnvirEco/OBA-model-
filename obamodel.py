@@ -241,10 +241,11 @@ class obamodel:
     
   
     # 2. Core Market Mechanisms
-    def run_model(self, output_file: str = "results.csv") -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Run the complete model simulation with proper market sequence."""
+    def run_model(self, output_file: str = "results.csv") -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Run model and save results including separate market and sector summaries."""
         print("Running emissions trading model...")
         market_summary = []
+        sector_summaries = []
         
         for year in range(self.start_year, self.end_year + 1):
             print(f"\nProcessing year {year}...")
@@ -280,12 +281,19 @@ class obamodel:
             # 10. Collect market summary
             market_summary.append(self._create_market_summary(year))
         
-        # Save results
-        market_summary_df = pd.DataFrame(market_summary)
-        facility_results = self._prepare_facility_results(self.start_year, self.end_year)
-        self.save_results(market_summary_df, facility_results, output_file)
+            # Create summaries
+            market_summary.append(self._create_market_summary(year))
+            sector_summaries.append(self.create_sector_summary(year))
         
-        return market_summary_df, facility_results
+        # Convert to DataFrames
+        market_summary_df = pd.DataFrame(market_summary)
+        sector_summary_df = pd.concat(sector_summaries, ignore_index=True)
+        facility_results = self._prepare_facility_results(self.start_year, self.end_year)
+        
+        # Save results
+        self.save_results(market_summary_df, sector_summary_df, facility_results, output_file)
+        
+        return market_summary_df, sector_summary_df, facility_results
         
     def calculate_sector_benchmarks(self, year: int) -> pd.Series:
         """
@@ -772,6 +780,94 @@ class obamodel:
         self.facilities_data[f'Cost to Output Ratio_{year}'] = (
             self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
         ).replace([float('inf'), -float('inf')], 0).fillna(0)
+
+#Results and Reproting 
+    def _create_market_summary(self, year: int) -> Dict:
+        """Create system-wide market summary."""
+        if f'Allowance Surplus/Deficit_{year}' not in self.facilities_data.columns:
+            raise KeyError(f"Required data missing for year {year}")
+        
+        # Calculate market-wide metrics
+        summary = {
+            'Year': year,
+            'Market_Price': float(self.market_price),
+            'Total_Allocations': float(self.facilities_data[f'Allocations_{year}'].sum()),
+            'Total_Emissions': float(self.facilities_data[f'Emissions_{year}'].sum()),
+            'Total_Abatement': float(self.facilities_data[f'Tonnes Abated_{year}'].sum()),
+            'Total_Trade_Volume': float(abs(self.facilities_data[f'Trade Volume_{year}'].sum())/2),
+            'Total_Trade_Cost': float(self.facilities_data[f'Trade Cost_{year}'].abs().sum()/2),
+            'Total_Abatement_Cost': float(self.facilities_data[f'Abatement Cost_{year}'].sum()),
+            'Total_Compliance_Cost': float(self.facilities_data[f'Compliance Cost_{year}'].sum()),
+            'Total_Net_Cost': float(self.facilities_data[f'Total Cost_{year}'].sum())
+        }
+        
+        # Add market balance metrics
+        summary['Market_Balance'] = summary['Total_Allocations'] - summary['Total_Emissions']
+        summary['Market_Balance_Ratio'] = (summary['Market_Balance'] / summary['Total_Allocations'] 
+                                         if summary['Total_Allocations'] > 0 else 0.0)
+        
+        # Calculate average costs
+        if summary['Total_Abatement'] > 0:
+            summary['Average_Abatement_Cost'] = summary['Total_Abatement_Cost'] / summary['Total_Abatement']
+        else:
+            summary['Average_Abatement_Cost'] = 0
+            
+        if summary['Total_Trade_Volume'] > 0:
+            summary['Average_Trade_Price'] = summary['Total_Trade_Cost'] / summary['Total_Trade_Volume']
+        else:
+            summary['Average_Trade_Price'] = 0
+        
+        return summary
+
+    def create_sector_summary(self, year: int) -> pd.DataFrame:
+        """Create detailed sector-level summary following facility results format."""
+        # Initialize list to store sector data
+        sector_data = []
+        
+        for sector in self.facilities_data['Sector'].unique():
+            sector_slice = self.facilities_data[self.facilities_data['Sector'] == sector]
+            
+            # Calculate sector metrics
+            record = {
+                'Sector': sector,
+                'Year': year,
+                'Output': float(sector_slice[f'Output_{year}'].sum()),
+                'Emissions': float(sector_slice[f'Emissions_{year}'].sum()),
+                'Benchmark': float(sector_slice[f'Benchmark_{year}'].mean()),
+                'Allocations': float(sector_slice[f'Allocations_{year}'].sum()),
+                'Allowance Surplus/Deficit': float(sector_slice[f'Allowance Surplus/Deficit_{year}'].sum()),
+                'Tonnes Abated': float(sector_slice[f'Tonnes Abated_{year}'].sum()),
+                'Abatement Cost': float(sector_slice[f'Abatement Cost_{year}'].sum()),
+                'Trade Volume': float(sector_slice[f'Trade Volume_{year}'].sum()),
+                'Trade Cost': float(sector_slice[f'Trade Cost_{year}'].sum()),
+                'Allowance Purchase Cost': float(sector_slice[f'Allowance Purchase Cost_{year}'].sum()),
+                'Allowance Sales Revenue': float(sector_slice[f'Allowance Sales Revenue_{year}'].sum()),
+                'Compliance Cost': float(sector_slice[f'Compliance Cost_{year}'].sum()),
+                'Total Cost': float(sector_slice[f'Total Cost_{year}'].sum())
+            }
+            
+            # Calculate ratios
+            total_profit = sector_slice['Profit'].sum()
+            total_output = record['Output']
+            
+            record['Cost to Profit Ratio'] = record['Total Cost'] / total_profit if total_profit > 0 else 0
+            record['Cost to Output Ratio'] = record['Total Cost'] / total_output if total_output > 0 else 0
+            
+            sector_data.append(record)
+        
+        # Convert to DataFrame
+        sector_summary = pd.DataFrame(sector_data)
+        
+        # Reorder columns to match facility results format
+        column_order = [
+            'Sector', 'Output', 'Emissions', 'Benchmark', 'Allocations',
+            'Allowance Surplus/Deficit', 'Tonnes Abated', 'Abatement Cost',
+            'Trade Volume', 'Trade Cost', 'Allowance Purchase Cost',
+            'Allowance Sales Revenue', 'Compliance Cost', 'Total Cost',
+            'Cost to Profit Ratio', 'Cost to Output Ratio', 'Year'
+        ]
+        
+        return sector_summary[column_order]
     
     # 4. Model Execution and Results
     def prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
@@ -982,49 +1078,118 @@ class obamodel:
         return report, sector_summary
 
     #sensitivity testing 
-    def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
-                         abatement_cost_curve: pd.DataFrame, start_year: int, 
-                         end_year: int, output_dir: str = "scenario_results") -> pd.DataFrame:
-        """Run model for multiple scenarios focusing on key parameters."""
-        import os
+    def create_sector_summary(self, scenario_results: List[Dict], output_dir: str) -> None:
+        """Create detailed sector-level summary across all scenarios."""
+        sector_records = []
         
-        # Load and validate scenarios
-        scenarios = self.load_all_scenarios(scenario_file)
-        
-        # Create output directory
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Track scenario results
-        scenario_results = []
-        
-        # Process each scenario
-        for scenario in scenarios:
-            scenario_name = scenario["name"].replace(" ", "_").lower()
-            print(f"\nProcessing Scenario: {scenario['name']}")
-            print("Key Parameters:")
-            print(f"  Price Range: ${scenario['floor_price']} - ${scenario['ceiling_price']}")
-            print(f"  Ratchet Rate: {scenario['benchmark_ratchet_rate']:.3f}")
-            print(f"  Growth Rate: {scenario['output_growth_rate']:.3f}")
-            print(f"  MSR Active: {scenario['msr_active']}")
+        for result in scenario_results:
+            scenario_name = result['name']
+            facility_data = result['facility_results']
             
-            try:
-                # Run scenario
-                result = self._run_single_scenario(
-                    scenario, facilities_data.copy(), abatement_cost_curve.copy(),
-                    start_year, end_year, output_dir
-                )
-                scenario_results.append(result)
-                print(f"Results saved for scenario: {scenario['name']}")
-                
-            except Exception as e:
-                print(f"Error in scenario {scenario['name']}: {str(e)}")
-                continue
+            # Group by sector and year
+            sector_yearly = facility_data.groupby(['Year', 'Sector']).agg({
+                'Output': 'sum',
+                'Emissions': 'sum',
+                'Allocations': 'sum',
+                'Tonnes Abated': 'sum',
+                'Abatement Cost': 'sum',
+                'Trade Volume': 'sum',
+                'Compliance Cost': 'sum',
+                'Total Cost': 'sum',
+                'Benchmark': 'mean'
+            }).reset_index()
+            
+            # Calculate additional metrics
+            sector_yearly['Emission Intensity'] = sector_yearly['Emissions'] / sector_yearly['Output']
+            sector_yearly['Abatement Rate'] = sector_yearly['Tonnes Abated'] / sector_yearly['Emissions']
+            sector_yearly['Cost per Tonne Abated'] = sector_yearly['Abatement Cost'] / sector_yearly['Tonnes Abated']
+            sector_yearly['Net Position'] = sector_yearly['Allocations'] - sector_yearly['Emissions']
+            sector_yearly['Compliance Rate'] = (sector_yearly['Net Position'] >= 0).astype(float)
+            sector_yearly['Scenario'] = scenario_name
+            
+            sector_records.append(sector_yearly)
         
-        # Create and save comparison
-        comparison = self._create_scenario_comparison(scenario_results)
-        comparison.to_csv(os.path.join(output_dir, 'scenario_comparison.csv'), index=False)
+        # Combine all records
+        sector_summary = pd.concat(sector_records, ignore_index=True)
         
-        return comparison
+        # Add year-over-year changes
+        for scenario in sector_summary['Scenario'].unique():
+            for sector in sector_summary['Sector'].unique():
+                mask = (sector_summary['Scenario'] == scenario) & (sector_summary['Sector'] == sector)
+                sector_summary.loc[mask, 'Emission Change'] = sector_summary.loc[mask, 'Emissions'].pct_change()
+                sector_summary.loc[mask, 'Benchmark Change'] = sector_summary.loc[mask, 'Benchmark'].pct_change()
+                sector_summary.loc[mask, 'Cost Change'] = sector_summary.loc[mask, 'Total Cost'].pct_change()
+        
+        # Save detailed sector summary
+        sector_summary.to_csv(os.path.join(output_dir, 'sector_summary.csv'), index=False)
+        
+        # Create pivot tables for key metrics
+        metrics = ['Emissions', 'Abatement Rate', 'Cost per Tonne Abated', 'Compliance Rate']
+        for metric in metrics:
+            pivot = pd.pivot_table(
+                sector_summary,
+                values=metric,
+                index=['Scenario', 'Sector'],
+                columns=['Year'],
+                aggfunc='mean'
+            )
+            pivot.to_csv(os.path.join(output_dir, f'sector_{metric.lower().replace(" ", "_")}.csv'))
+
+    def create_enhanced_market_summary(self, scenario_results: List[Dict], output_dir: str) -> None:
+        """Create enhanced market summary with additional indicators."""
+        market_records = []
+        
+        for result in scenario_results:
+            scenario_name = result['name']
+            market_data = result['market_summary']
+            parameters = result['parameters']
+            
+            for year, data in market_data.iterrows():
+                record = {
+                    'Scenario': scenario_name,
+                    'Year': data['Year'],
+                    'Market Price': data['Market Price'],
+                    'Total Emissions': data['Total Emissions'],
+                    'Total Allocations': data['Total Allocations'],
+                    'Total Abatement': data['Total Abatement'],
+                    'Market Balance': data['Surplus Ratio'],
+                    'Total Trade Volume': data['Trade Volume'],
+                    'Average Trade Cost': data['Total Trade Cost'] / data['Trade Volume'] if data['Trade Volume'] > 0 else 0,
+                    'Total Compliance Cost': data['Total Compliance Cost'],
+                    'Cost per Tonne Abated': data['Total Compliance Cost'] / data['Total Abatement'] if data['Total Abatement'] > 0 else 0,
+                    'Floor Price': parameters['floor_price'],
+                    'Ceiling Price': parameters['ceiling_price'],
+                    'Ratchet Rate': parameters['benchmark_ratchet_rate'],
+                    'MSR Active': parameters['msr_active']
+                }
+                market_records.append(record)
+        
+        # Create DataFrame
+        market_summary = pd.DataFrame(market_records)
+        
+        # Calculate additional metrics
+        for scenario in market_summary['Scenario'].unique():
+            mask = market_summary['Scenario'] == scenario
+            market_summary.loc[mask, 'Price Change'] = market_summary.loc[mask, 'Market Price'].pct_change()
+            market_summary.loc[mask, 'Emission Change'] = market_summary.loc[mask, 'Total Emissions'].pct_change()
+            market_summary.loc[mask, 'Abatement Change'] = market_summary.loc[mask, 'Total Abatement'].pct_change()
+        
+        # Save full market summary
+        market_summary.to_csv(os.path.join(output_dir, 'enhanced_market_summary.csv'), index=False)
+        
+        # Create scenario comparison summary
+        scenario_summary = market_summary.groupby('Scenario').agg({
+            'Market Price': ['mean', 'min', 'max', 'std'],
+            'Total Emissions': 'sum',
+            'Total Abatement': 'sum',
+            'Total Compliance Cost': 'sum',
+            'Cost per Tonne Abated': 'mean',
+            'Market Balance': ['mean', 'std'],
+            'Total Trade Volume': 'sum'
+        }).round(4)
+        
+        scenario_summary.columns = [f'{col[0]}_{col[1]}'.lower() for col in scenario_summary.columns]
+        scenario_summary.to_csv(os.path.join(output_dir, 'scenario_comparison_summary.csv'))
 
     def _run_single_scenario(self, scenario: Dict, facilities_data: pd.DataFrame,
                             abatement_cost_curve: pd.DataFrame, start_year: int,
@@ -1154,68 +1319,4 @@ class obamodel:
         
         return pd.DataFrame(detailed_records)
     
-    def _create_market_summary(self, year: int) -> Dict:
-        """Create market summary with sector-specific reporting."""
-        if f'Allowance Surplus/Deficit_{year}' not in self.facilities_data.columns:
-            raise KeyError(f"Required data missing for year {year}")
-        
-        # Overall market metrics
-        total_metrics = {
-            'Year': year,
-            'Total Allocations': self.facilities_data[f'Allocations_{year}'].sum(),
-            'Total Emissions': self.facilities_data[f'Emissions_{year}'].sum(),
-            'Total Abatement': self.facilities_data[f'Tonnes Abated_{year}'].sum(),
-            'Market Price': self.market_price,
-        }
-        
-        # Print overall market status
-        print(f"\n=== Market Summary for Year {year} ===")
-        print("\nOverall Market Status:")
-        print(f"Total Allocations: {total_metrics['Total Allocations']:,.2f}")
-        print(f"Total Emissions: {total_metrics['Total Emissions']:,.2f}")
-        print(f"Total Abatement: {total_metrics['Total Abatement']:,.2f}")
-        print(f"Market Price: ${self.market_price:.2f}")
-        
-        # Sector-specific reporting
-        print("\nSector-Specific Performance:")
-        sector_metrics = {}
-        for sector in self.facilities_data['Sector'].unique():
-            sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
-            
-            # Calculate sector metrics
-            allocations = sector_data[f'Allocations_{year}'].sum()
-            emissions = sector_data[f'Emissions_{year}'].sum()
-            abatement = sector_data[f'Tonnes Abated_{year}'].sum()
-            benchmark = sector_data[f'Benchmark_{year}'].mean()
-            
-            # Store sector metrics
-            sector_metrics[sector] = {
-                'Allocations': allocations,
-                'Emissions': emissions,
-                'Abatement': abatement,
-                'Benchmark': benchmark,
-                'Surplus/Deficit': allocations - emissions
-            }
-            
-            # Print sector details
-            print(f"\n{sector}:")
-            print(f"  Benchmark: {benchmark:.6f}")
-            print(f"  Allocations: {allocations:,.2f}")
-            print(f"  Emissions: {emissions:,.2f}")
-            print(f"  Abatement: {abatement:,.2f}")
-            print(f"  Surplus/Deficit: {(allocations - emissions):,.2f}")
-        
-        # Calculate overall market balance
-        remaining_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
-        remaining_deficit = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-        surplus_ratio = remaining_surplus / total_metrics['Total Allocations'] if total_metrics['Total Allocations'] > 0 else 0.0
-        
-        # Add market balance metrics
-        total_metrics.update({
-            'Remaining Surplus': remaining_surplus,
-            'Remaining Deficit': remaining_deficit,
-            'Surplus Ratio': surplus_ratio,
-            'Sector_Metrics': sector_metrics  # Include sector data in return value
-        })
-        
-        return total_metrics
+   
