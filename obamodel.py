@@ -64,7 +64,12 @@ class obamodel:
   
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
                  start_year: int, end_year: int, scenario_params: Dict):
-        """Initialize OBA model with configuration and scenario parameters."""
+        """Initialize OBA model with sector-specific configuration."""
+        # Validate sector data
+        if 'Sector' not in facilities_data.columns:
+            raise ValueError("Facilities data must include 'Sector' column")
+        
+        # Store base data
         self.facilities_data = facilities_data.copy()
         self.abatement_cost_curve = abatement_cost_curve.copy()
         self.start_year = start_year
@@ -74,15 +79,20 @@ class obamodel:
         self.floor_price = scenario_params.get("floor_price", 20)
         self.ceiling_price = scenario_params.get("ceiling_price", 200)
         self.price_increment = scenario_params.get("price_increment", 5)
-        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
-        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
-        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.03)
         
-        # MSR parameters
-        self.msr_active = scenario_params.get("msr_active", False)
-        self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
-        self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
-        self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
+        # Get sector-specific parameters if provided, otherwise use defaults
+        self.sector_params = scenario_params.get("sector_params", {})
+        
+        # Initialize sector benchmarks
+        self.sector_benchmarks = self._initialize_sector_benchmarks()
+        
+        # Initialize other parameters
+        self._initialize_model_parameters(scenario_params)
+
+        # Initialize price parameters
+        self.floor_price = scenario_params.get("floor_price", 20)
+        self.ceiling_price = scenario_params.get("ceiling_price", 200)
+        self.price_increment = scenario_params.get("price_increment", 5)
         
         # Initialize price schedule
         self.price_schedule = {
@@ -90,17 +100,95 @@ class obamodel:
             for year in range(start_year, end_year + 1)
         }
         
-        # Print initialization parameters
-        print("\nInitializing OBA Model with parameters:")
-        print(f"Time period: {start_year} - {end_year}")
-        print(f"Price range: {self.floor_price} - {self.ceiling_price}")
-        print(f"Growth rates: Output {self.output_growth_rate}, Emissions {self.emissions_growth_rate}")
-        print(f"Benchmark ratchet rate: {self.benchmark_ratchet_rate}")
-        print(f"MSR active: {self.msr_active}")
+        # Cap prices at ceiling
+        self.price_schedule = {
+            year: min(price, self.ceiling_price)
+            for year, price in self.price_schedule.items()
+        }
         
-        # Initialize model columns and validate data
-        self._initialize_columns()
-        self._validate_input_data()
+        print("\nInitialized Price Schedule:")
+        for year, price in self.price_schedule.items():
+            print(f"Year {year}: ${price:.2f}")              
+            
+        print("\nInitialized sectors and benchmarks:")
+        for sector, benchmark in self.sector_benchmarks.items():
+            print(f"{sector}: {benchmark:.6f}")
+
+    def _initialize_sector_benchmarks(self) -> Dict[str, float]:
+        """Initialize sector-specific benchmarks using chosen methodology."""
+        benchmarks = {}
+        
+        # Get benchmark setting method from scenario parameters
+        method = self.sector_params.get('benchmark_method', 'percentile')
+        
+        for sector in self.facilities_data['Sector'].unique():
+            # Get sector data
+            sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
+            
+            # Get sector-specific parameters
+            sector_config = self.sector_params.get(sector, {})
+            
+            # Calculate benchmark based on method
+            if method == 'top_performer':
+                percentile = sector_config.get('top_percentile', 0.1)  # Default top 10%
+                benchmark = self.calculate_sector_benchmark_top_performer(sector_data, percentile)
+                
+            elif method == 'percentile':
+                target_percentile = sector_config.get('target_percentile', 0.8)  # Default 80th
+                benchmark = self.calculate_sector_benchmark_percentile(sector_data, target_percentile)
+                
+            elif method == 'top_average':
+                top_n = sector_config.get('top_n', 3)  # Default top 3
+                benchmark = self.calculate_sector_benchmark_top_average(sector_data, top_n)
+                
+            else:
+                raise ValueError(f"Unknown benchmark method: {method}")
+                
+            # Store benchmark
+            benchmarks[sector] = benchmark
+            
+            # Log details
+            print(f"\nSector: {sector}")
+            print(f"  Method: {method}")
+            print(f"  Benchmark: {benchmark:.6f}")
+            print(f"  Sector Size: {len(sector_data)} facilities")
+            
+        return benchmarks
+
+    def analyze_benchmark_coverage(self, sector: str, benchmark: float) -> None:
+        """Analyze how many facilities meet the benchmark."""
+        sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
+        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
+        
+        meets_benchmark = (intensities <= benchmark).sum()
+        total_facilities = len(sector_data)
+        
+        print(f"\nBenchmark Coverage Analysis for {sector}:")
+        print(f"  Benchmark: {benchmark:.6f}")
+        print(f"  Facilities Meeting Benchmark: {meets_benchmark} of {total_facilities}")
+        print(f"  Coverage Percentage: {(meets_benchmark/total_facilities)*100:.1f}%")
+
+    def _initialize_model_parameters(self, scenario_params: Dict) -> None:
+        """Initialize model parameters including sector-specific settings."""
+        # Base parameters
+        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
+        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
+        
+        # Get sector-specific ratchet rates or use default
+        self.benchmark_ratchet_rates = {}
+        default_ratchet = scenario_params.get("benchmark_ratchet_rate", 0.03)
+        
+        for sector in self.facilities_data['Sector'].unique():
+            sector_config = self.sector_params.get(sector, {})
+            self.benchmark_ratchet_rates[sector] = sector_config.get(
+                'ratchet_rate', default_ratchet
+            )
+        
+        # MSR parameters
+        self.msr_active = scenario_params.get("msr_active", False)
+        self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
+        self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
+        self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
                      
     def _validate_input_data(self) -> None:
         """Validate input data structure and relationships."""
@@ -247,10 +335,219 @@ class obamodel:
         
         return market_summary_df, facility_results
         
+    def calculate_sector_benchmarks(self, year: int) -> pd.Series:
+        """
+        Calculate sector-specific benchmarks for a given year.
+        
+        Args:
+            year: The year to calculate benchmarks for
+            
+        Returns:
+            Series with benchmark values by sector
+        """
+        print(f"\nCalculating sector benchmarks for year {year}")
+        
+        # Get benchmark method and parameters from scenario
+        method = self.sector_params.get('benchmark_method', 'percentile')
+        
+        sector_benchmarks = {}
+        
+        # Calculate benchmark for each sector
+        for sector in self.facilities_data['Sector'].unique():
+            # Get sector data
+            sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
+            
+            # Get sector-specific parameters
+            sector_config = self.sector_params.get(sector, {})
+            
+            print(f"\nProcessing sector: {sector}")
+            print(f"Method: {method}")
+            print(f"Configuration: {sector_config}")
+            
+            # Calculate initial benchmark
+            initial_benchmark = self.get_sector_benchmark(sector_data, method, sector_config)
+            
+            # Apply ratchet rate if not first year
+            if year > self.start_year:
+                years_elapsed = year - self.start_year
+                ratchet_rate = sector_config.get('ratchet_rate', self.benchmark_ratchet_rate)
+                final_benchmark = initial_benchmark * (1 - ratchet_rate) ** years_elapsed
+                print(f"Applied ratchet rate {ratchet_rate} for {years_elapsed} years")
+                print(f"Final benchmark: {final_benchmark:.6f}")
+            else:
+                final_benchmark = initial_benchmark
+                
+            sector_benchmarks[sector] = final_benchmark
+        
+        # Convert to pandas Series for easy mapping
+        result = pd.Series(sector_benchmarks)
+        
+        print("\nFinal sector benchmarks:")
+        for sector, benchmark in result.items():
+            print(f"{sector}: {benchmark:.6f}")
+            
+        return result
+        
+    def calculate_sector_benchmark_percentile(self, sector_data: pd.DataFrame, percentile: float = 0.8) -> float:
+        """
+        Calculate sector benchmark based on specified percentile.
+        
+        Args:
+            sector_data: DataFrame containing sector facility data
+            percentile: Target percentile (default: 0.8 for 80th percentile)
+            
+        Returns:
+            float: Calculated benchmark value
+        """
+        # Calculate facility-level emission intensities
+        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
+        
+        # Get specified percentile
+        benchmark = intensities.quantile(percentile)
+        
+        print(f"\nPercentile Benchmark Calculation:")
+        print(f"Number of facilities: {len(sector_data)}")
+        print(f"Target percentile: {percentile}")
+        print(f"Resulting benchmark: {benchmark:.6f}")
+        
+        return benchmark
+
+    def calculate_sector_benchmark_top_performer(self, sector_data: pd.DataFrame, percentile: float = 0.1) -> float:
+        """
+        Calculate sector benchmark based on top performers.
+        
+        Args:
+            sector_data: DataFrame containing sector facility data
+            percentile: Top performer percentile (default: 0.1 for top 10%)
+            
+        Returns:
+            float: Calculated benchmark value
+        """
+        # Calculate facility-level emission intensities
+        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
+        
+        # Get top percentile performer
+        benchmark = intensities.quantile(percentile)
+        
+        print(f"\nTop Performer Benchmark Calculation:")
+        print(f"Number of facilities: {len(sector_data)}")
+        print(f"Top performer percentile: {percentile}")
+        print(f"Resulting benchmark: {benchmark:.6f}")
+        
+        return benchmark
+
+    def calculate_sector_benchmark_top_average(self, sector_data: pd.DataFrame, top_n: int = 3) -> float:
+        """
+        Calculate sector benchmark based on average of top N performers.
+        
+        Args:
+            sector_data: DataFrame containing sector facility data
+            top_n: Number of top performers to average (default: 3)
+            
+        Returns:
+            float: Calculated benchmark value
+        """
+        # Calculate facility-level emission intensities
+        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
+        
+        # Get average of top N performers
+        top_performers = intensities.nsmallest(min(top_n, len(sector_data)))
+        benchmark = top_performers.mean()
+        
+        print(f"\nTop Average Benchmark Calculation:")
+        print(f"Number of facilities: {len(sector_data)}")
+        print(f"Number of top performers used: {len(top_performers)}")
+        print(f"Resulting benchmark: {benchmark:.6f}")
+        
+        return benchmark
+
+    def calculate_sector_benchmark_weighted(self, sector_data: pd.DataFrame, weight_col: str = 'Baseline Output') -> float:
+        """
+        Calculate sector benchmark based on weighted average.
+        
+        Args:
+            sector_data: DataFrame containing sector facility data
+            weight_col: Column to use for weighting (default: 'Baseline Output')
+            
+        Returns:
+            float: Calculated benchmark value
+        """
+        # Calculate weighted average intensity
+        total_emissions = sector_data['Baseline Emissions'].sum()
+        total_weight = sector_data[weight_col].sum()
+        
+        benchmark = total_emissions / total_weight if total_weight > 0 else 0
+        
+        print(f"\nWeighted Average Benchmark Calculation:")
+        print(f"Number of facilities: {len(sector_data)}")
+        print(f"Weight column: {weight_col}")
+        print(f"Resulting benchmark: {benchmark:.6f}")
+        
+        return benchmark
+
+    def calculate_sector_benchmark_fallback(self, sector_data: pd.DataFrame) -> float:
+        """
+        Calculate fallback benchmark when other methods not applicable.
+        
+        Args:
+            sector_data: DataFrame containing sector facility data
+            
+        Returns:
+            float: Calculated benchmark value
+        """
+        # Use simple average as fallback
+        intensities = sector_data['Baseline Emissions'] / sector_data['Baseline Output']
+        benchmark = intensities.mean()
+        
+        print(f"\nFallback Benchmark Calculation:")
+        print(f"Number of facilities: {len(sector_data)}")
+        print(f"Resulting benchmark: {benchmark:.6f}")
+        
+        return benchmark
+
+    def get_sector_benchmark(self, sector_data: pd.DataFrame, method: str, params: Dict) -> float:
+        """
+        Get sector benchmark using specified method and parameters.
+        
+        Args:
+            sector_data: DataFrame containing sector facility data
+            method: Benchmark calculation method
+            params: Parameters for benchmark calculation
+            
+        Returns:
+            float: Calculated benchmark value
+        """
+        try:
+            if method == 'percentile':
+                percentile = params.get('target_percentile', 0.8)
+                return self.calculate_sector_benchmark_percentile(sector_data, percentile)
+                
+            elif method == 'top_performer':
+                percentile = params.get('top_percentile', 0.1)
+                return self.calculate_sector_benchmark_top_performer(sector_data, percentile)
+                
+            elif method == 'top_average':
+                top_n = params.get('top_n', 3)
+                return self.calculate_sector_benchmark_top_average(sector_data, top_n)
+                
+            elif method == 'weighted':
+                weight_col = params.get('weight_column', 'Baseline Output')
+                return self.calculate_sector_benchmark_weighted(sector_data, weight_col)
+                
+            else:
+                print(f"Warning: Unknown benchmark method '{method}'. Using fallback.")
+                return self.calculate_sector_benchmark_fallback(sector_data)
+                
+        except Exception as e:
+            print(f"Error calculating benchmark: {str(e)}")
+            print("Using fallback method.")
+            return self.calculate_sector_benchmark_fallback(sector_data)
+
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate dynamic values with improved market balance checks."""
+        """Calculate dynamic values with sector-specific benchmarks."""
         years_elapsed = year - self.start_year
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
+        print(f"MSR Status: {'Active' if self.msr_active else 'Inactive'}")
         
         # Calculate emissions intensity
         if year > self.start_year:
@@ -264,7 +561,7 @@ class obamodel:
                 self.facilities_data['Baseline Output']
             )
         
-        # Calculate output and emissions with growth rates
+        # Calculate output and emissions
         self.facilities_data[f'Output_{year}'] = (
             self.facilities_data['Baseline Output'] *
             (1 + self.output_growth_rate) ** years_elapsed
@@ -275,30 +572,62 @@ class obamodel:
             emissions_intensity
         ).clip(lower=0)
         
-        # Calculate benchmark considering market balance
-        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
-        if year == self.start_year:
-            # Set initial benchmark to achieve market balance
-            initial_benchmark = total_emissions / self.facilities_data[f'Output_{year}'].sum()
-        else:
-            # Apply ratchet rate while maintaining market balance
-            previous_benchmark = self.facilities_data[f'Benchmark_{year-1}'].mean()
-            initial_benchmark = previous_benchmark * (1 - self.benchmark_ratchet_rate)
+        # Calculate sector-specific benchmarks
+        sector_benchmarks = self.calculate_sector_benchmarks(year)
         
-        self.facilities_data[f'Benchmark_{year}'] = initial_benchmark
+        # Apply sector benchmarks to facilities
+        self.facilities_data[f'Benchmark_{year}'] = self.facilities_data['Sector'].map(sector_benchmarks)
         
-        # Calculate allocations
+        # Calculate allocations using sector benchmarks
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * 
             self.facilities_data[f'Benchmark_{year}']
         )
         
-        # Calculate initial surplus/deficit
+        # Calculate market position
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        current_surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
+        
+        # Apply MSR adjustments if active
+        if self.msr_active:
+            adjustment_factor = 1.0
+            if current_surplus_ratio > self.msr_upper_threshold:
+                # Too much surplus - tighten benchmarks
+                adjustment_factor = (1 + self.msr_upper_threshold) / (1 + current_surplus_ratio)
+                print(f"MSR: Surplus ({current_surplus_ratio:.4f}) above threshold - tightening")
+            elif current_surplus_ratio < self.msr_lower_threshold:
+                # Too much deficit - loosen benchmarks
+                adjustment_factor = (1 + self.msr_lower_threshold) / (1 + current_surplus_ratio)
+                print(f"MSR: Surplus ({current_surplus_ratio:.4f}) below threshold - loosening")
+            
+            if adjustment_factor != 1.0:
+                self.facilities_data[f'Benchmark_{year}'] *= adjustment_factor
+                self.facilities_data[f'Allocations_{year}'] *= adjustment_factor
+                
+                # Recalculate market position
+                total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+                current_surplus_ratio = (total_allocations - total_emissions) / total_allocations
+        
+        # Calculate and store surplus/deficit
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
-
+        
+        # Store MSR metrics if active
+        if self.msr_active:
+            self.facilities_data[f'MSR_Adjustment_{year}'] = adjustment_factor
+        
+        # Market status report
+        print(f"\nYear {year} Market Status:")
+        print(f"Total Emissions: {total_emissions:,.2f}")
+        print(f"Total Allocations: {total_allocations:,.2f}")
+        print(f"Current Surplus Ratio: {current_surplus_ratio:.4f}")
+        if self.msr_active:
+            print(f"MSR Adjustment Factor: {adjustment_factor:.4f}")
+            
+            
     def calculate_market_positions(self, year: int) -> Tuple[float, float]:
         """Calculate current market positions."""
         # Calculate total supply (positive positions)
@@ -556,50 +885,47 @@ class obamodel:
    
 
     def analyze_market_stability(self, year: int) -> None:
-        """Analyze market stability conditions."""
-        # Initialize variables
-        price_change = 0.0
-        surplus_change = 0.0
+        """Analyze market stability with sector-specific reporting."""
+        print(f"\n=== Market Stability Analysis Year {year} ===")
         
-        # Calculate market metrics
+        # Overall market stability
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-        surplus = total_allocations - total_emissions
-        surplus_ratio = surplus / total_allocations if total_allocations > 0 else 0
+        overall_surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
         
-        # Calculate price responsiveness for non-base years
-        if year > self.start_year:
-            try:
-                # Get previous year's price from schedule
-                prev_price = self.price_schedule.get(year-1, self.floor_price)
-                if prev_price > 0:
-                    price_change = (self.market_price - prev_price) / prev_price
-                else:
-                    price_change = 0.0
+        print("\nOverall Market Stability:")
+        print(f"Market-wide Surplus Ratio: {overall_surplus_ratio:.4f}")
+        
+        # Sector-specific stability analysis
+        print("\nSector Stability Analysis:")
+        for sector in self.facilities_data['Sector'].unique():
+            sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
+            
+            # Calculate sector metrics
+            sector_emissions = sector_data[f'Emissions_{year}'].sum()
+            sector_allocations = sector_data[f'Allocations_{year}'].sum()
+            sector_surplus_ratio = (sector_allocations - sector_emissions) / sector_allocations if sector_allocations > 0 else 0
+            
+            print(f"\n{sector}:")
+            print(f"  Surplus Ratio: {sector_surplus_ratio:.4f}")
+            
+            # Calculate year-over-year changes if not first year
+            if year > self.start_year:
+                try:
+                    # Emissions change
+                    prev_emissions = sector_data[f'Emissions_{year-1}'].sum()
+                    emissions_change = (sector_emissions - prev_emissions) / prev_emissions if prev_emissions > 0 else 0
                     
-                # Calculate surplus change if previous data exists
-                if f'Surplus Ratio_{year-1}' in self.facilities_data.columns:
-                    prev_surplus = self.facilities_data[f'Surplus Ratio_{year-1}'].mean()
-                    surplus_change = surplus_ratio - prev_surplus
-                else:
-                    surplus_change = 0.0
+                    # Benchmark change
+                    current_benchmark = sector_data[f'Benchmark_{year}'].mean()
+                    prev_benchmark = sector_data[f'Benchmark_{year-1}'].mean()
+                    benchmark_change = (current_benchmark - prev_benchmark) / prev_benchmark if prev_benchmark > 0 else 0
                     
-            except Exception as e:
-                print(f"Warning: Stability calculation issue for year {year}: {str(e)}")
-                price_change = 0.0
-                surplus_change = 0.0
-        
-        # Store stability metrics
-        self.facilities_data[f'Market_Surplus_Ratio_{year}'] = surplus_ratio
-        self.facilities_data[f'Price_Change_{year}'] = price_change
-        self.facilities_data[f'Surplus_Change_{year}'] = surplus_change
-        
-        # Print analysis
-        print(f"\nMarket Stability Analysis Year {year}:")
-        if year > self.start_year:
-            print(f"Price Change: {price_change:.4f}")
-            print(f"Surplus Change: {surplus_change:.4f}")
-        print(f"Current Surplus Ratio: {surplus_ratio:.4f}")
+                    print(f"  Emissions Change: {emissions_change:.4f}")
+                    print(f"  Benchmark Change: {benchmark_change:.4f}")
+                    
+                except Exception as e:
+                    print(f"  Error calculating changes: {str(e)}")
     
     # 3. Cost and Performance Calculations
     def calculate_costs(self, year: int) -> None:
@@ -803,45 +1129,45 @@ class obamodel:
         return pd.concat(stats, keys=['Annual', 'Sector']) if 'Sector' in facility_results.columns else annual_stats
 
     def get_compliance_report(self, year: int) -> pd.DataFrame:
-        """
-        Generate a detailed compliance report for a specific year.
-        
-        Args:
-            year: Year to generate report for
-            
-        Returns:
-            DataFrame with compliance metrics for each facility
-        """
-        # Core compliance metrics
+        """Generate compliance report with sector information."""
+        # Core metrics
         metrics = [
-            'Output', 'Emissions', 'Allocations', 'Allowance Surplus/Deficit',
-            'Tonnes Abated', 'Trade Volume', 'Compliance Cost', 'Total Cost',
-            'Cost to Profit Ratio', 'Cost to Output Ratio'
+            'Sector', 'Output', 'Emissions', 'Benchmark', 'Allocations',
+            'Allowance Surplus/Deficit', 'Tonnes Abated', 'Trade Volume',
+            'Compliance Cost', 'Total Cost', 'Cost to Profit Ratio'
         ]
         
-        # Create report with facility information
-        report = self.facilities_data[['Facility ID'] + 
-            [f'{metric}_{year}' for metric in metrics]].copy()
+        # Create report with facility and sector information
+        report = self.facilities_data[['Facility ID', 'Sector'] + 
+            [col for col in self.facilities_data.columns if f'_{year}' in col]].copy()
         
-        # Clean column names
-        report.columns = ['Facility ID'] + metrics
+        # Clean up column names
+        report.columns = [col.replace(f'_{year}', '') if f'_{year}' in col else col 
+                         for col in report.columns]
         
         # Add compliance status
         report['Compliance Status'] = report['Allowance Surplus/Deficit'].apply(
             lambda x: 'Compliant' if x >= 0 else 'Non-Compliant'
         )
         
-        # Calculate cost effectiveness metrics
-        report['Abatement Rate'] = report['Tonnes Abated'] / report['Emissions']
-        report['Cost per Tonne Abated'] = (
-            report['Total Cost'] / report['Tonnes Abated']
-        ).replace([np.inf, -np.inf], np.nan)
+        # Add sector summary
+        sector_summary = report.groupby('Sector').agg({
+            'Emissions': 'sum',
+            'Allocations': 'sum',
+            'Tonnes Abated': 'sum',
+            'Compliance Cost': 'sum',
+            'Compliance Status': lambda x: (x == 'Compliant').mean()
+        }).round(4)
         
-        print(f"\nCompliance Report for Year {year}:")
-        print(f"Total Facilities: {len(report)}")
-        print(f"Compliant Facilities: {(report['Compliance Status'] == 'Compliant').sum()}")
+        sector_summary = sector_summary.rename(
+            columns={'Compliance Status': 'Compliance Rate'}
+        )
         
-        return report
+        print(f"\nCompliance Report Summary for Year {year}:")
+        print("\nSector Performance:")
+        print(sector_summary.to_string())
+        
+        return report, sector_summary
 
     #sensitivity testing 
     def run_all_scenarios(self, scenario_file: str, facilities_data: pd.DataFrame, 
@@ -1012,54 +1338,67 @@ class obamodel:
         return pd.DataFrame(detailed_records)
     
     def _create_market_summary(self, year: int) -> Dict:
-        """Create summary of market conditions for a given year."""
-        # Ensure that surplus and deficit are calculated before calling this method
+        """Create market summary with sector-specific reporting."""
         if f'Allowance Surplus/Deficit_{year}' not in self.facilities_data.columns:
-            raise KeyError(f"'Allowance Surplus/Deficit_{year}' is missing. Ensure surplus/deficit is calculated before calling _create_market_summary.")
-    
-        # Calculate total allocations, emissions, and abatement
-        facility_total_abatement = self.facilities_data[f'Tonnes Abated_{year}'].sum()
-        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
-    
-        # Calculate surplus and deficit
+            raise KeyError(f"Required data missing for year {year}")
+        
+        # Overall market metrics
+        total_metrics = {
+            'Year': year,
+            'Total Allocations': self.facilities_data[f'Allocations_{year}'].sum(),
+            'Total Emissions': self.facilities_data[f'Emissions_{year}'].sum(),
+            'Total Abatement': self.facilities_data[f'Tonnes Abated_{year}'].sum(),
+            'Market Price': self.market_price,
+        }
+        
+        # Print overall market status
+        print(f"\n=== Market Summary for Year {year} ===")
+        print("\nOverall Market Status:")
+        print(f"Total Allocations: {total_metrics['Total Allocations']:,.2f}")
+        print(f"Total Emissions: {total_metrics['Total Emissions']:,.2f}")
+        print(f"Total Abatement: {total_metrics['Total Abatement']:,.2f}")
+        print(f"Market Price: ${self.market_price:.2f}")
+        
+        # Sector-specific reporting
+        print("\nSector-Specific Performance:")
+        sector_metrics = {}
+        for sector in self.facilities_data['Sector'].unique():
+            sector_data = self.facilities_data[self.facilities_data['Sector'] == sector]
+            
+            # Calculate sector metrics
+            allocations = sector_data[f'Allocations_{year}'].sum()
+            emissions = sector_data[f'Emissions_{year}'].sum()
+            abatement = sector_data[f'Tonnes Abated_{year}'].sum()
+            benchmark = sector_data[f'Benchmark_{year}'].mean()
+            
+            # Store sector metrics
+            sector_metrics[sector] = {
+                'Allocations': allocations,
+                'Emissions': emissions,
+                'Abatement': abatement,
+                'Benchmark': benchmark,
+                'Surplus/Deficit': allocations - emissions
+            }
+            
+            # Print sector details
+            print(f"\n{sector}:")
+            print(f"  Benchmark: {benchmark:.6f}")
+            print(f"  Allocations: {allocations:,.2f}")
+            print(f"  Emissions: {emissions:,.2f}")
+            print(f"  Abatement: {abatement:,.2f}")
+            print(f"  Surplus/Deficit: {(allocations - emissions):,.2f}")
+        
+        # Calculate overall market balance
         remaining_surplus = self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(lower=0).sum()
         remaining_deficit = abs(self.facilities_data[f'Allowance Surplus/Deficit_{year}'].clip(upper=0).sum())
-            
-        # Surplus ratio for the year
-        surplus_ratio = remaining_surplus / total_allocations if total_allocations > 0 else 0.0
-        self.facilities_data[f'Surplus Ratio_{year}'] = surplus_ratio
-    
-        # Emission-weighted benchmark ratchet rate
-        weighted_ratchet_rate = (
-            (self.facilities_data['Baseline Emissions'] *
-             self.facilities_data['Benchmark Ratchet Rate']).sum() /
-            self.facilities_data['Baseline Emissions'].sum()
-        ) if year > self.start_year else self.benchmark_ratchet_rate
-    
-        # Debugging logs for troubleshooting
-        print(f"\n=== Market Summary for Year {year} ===")
-        print(f"Total Allocations: {total_allocations:.2f}")
-        print(f"Total Emissions: {total_emissions:.2f}")
-        print(f"Remaining Surplus: {remaining_surplus:.2f}")
-        print(f"Remaining Deficit: {remaining_deficit:.2f}")
-       
-        # Return market summary
-        return {
-            'Year': year,
-            'Total Allocations': total_allocations,
-            'Total Emissions': total_emissions,
-            'Total Abatement': facility_total_abatement,
-            'Market Price': self.market_price,
-            'Trade Volume': self.facilities_data[f'Trade Volume_{year}'].abs().sum() / 2,
-            'Total Trade Cost': self.facilities_data[f'Trade Cost_{year}'].abs().sum() / 2,
-            'Total Abatement Cost': self.facilities_data[f'Abatement Cost_{year}'].sum(),
-            'Total Compliance Cost': self.facilities_data[f'Compliance Cost_{year}'].sum(),
-            'Net Market Cost': self.facilities_data[f'Total Cost_{year}'].sum(),
-            'Average Cost to Profit Ratio': self.facilities_data[f'Cost to Profit Ratio_{year}'].mean(),
-            'Average Cost to Output Ratio': self.facilities_data[f'Cost to Output Ratio_{year}'].mean(),
+        surplus_ratio = remaining_surplus / total_metrics['Total Allocations'] if total_metrics['Total Allocations'] > 0 else 0.0
+        
+        # Add market balance metrics
+        total_metrics.update({
             'Remaining Surplus': remaining_surplus,
             'Remaining Deficit': remaining_deficit,
             'Surplus Ratio': surplus_ratio,
-            'Emission-Weighted Ratchet Rate': weighted_ratchet_rate
-        }
+            'Sector_Metrics': sector_metrics  # Include sector data in return value
+        })
+        
+        return total_metrics
