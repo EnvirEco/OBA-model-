@@ -373,6 +373,147 @@ class obamodel:
         print(f"Total Allocations: {self.facilities_data[f'Allocations_{year}'].sum():,.2f}")
         print(f"Average Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():.6f}")
             
+    def adjust_benchmarks_with_rolling_average(self, year: int) -> None:
+        """
+        Adjust benchmarks every two years based on rolling averages of historical data.
+        """
+        # Check if this is an adjustment year (every two years)
+        is_adjustment_year = (year - self.start_year) % 2 == 0
+        if not is_adjustment_year and year != self.start_year:
+            print(f"\nYear {year} is not an adjustment year. Keeping current benchmarks.")
+            return
+    
+        print(f"\n=== Periodic Benchmark Adjustment Analysis for Year {year} ===")
+    
+        # Calculate rolling averages from previous periods
+        look_back_years = 2  # How many years of history to consider
+        historical_data = {}
+        
+        for prev_year in range(max(self.start_year, year - look_back_years), year):
+            historical_data[prev_year] = {
+                'emissions': self.facilities_data[f'Emissions_{prev_year}'].sum(),
+                'allocations': self.facilities_data[f'Allocations_{prev_year}'].sum(),
+                'output': self.facilities_data[f'Output_{prev_year}'].sum()
+            }
+        
+        # Calculate rolling averages if we have historical data
+        if historical_data:
+            avg_emissions = sum(data['emissions'] for data in historical_data.values()) / len(historical_data)
+            avg_allocations = sum(data['allocations'] for data in historical_data.values()) / len(historical_data)
+            avg_output = sum(data['output'] for data in historical_data.values()) / len(historical_data)
+            
+            print("\nHistorical Averages:")
+            print(f"Average Emissions: {avg_emissions:,.2f}")
+            print(f"Average Allocations: {avg_allocations:,.2f}")
+            print(f"Average Output: {avg_output:,.2f}")
+        else:
+            # For the first year, use current values
+            avg_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+            avg_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+            avg_output = self.facilities_data[f'Output_{year}'].sum()
+        
+        # Calculate target metrics
+        target_surplus_ratio = 0.05  # Target 5% oversupply
+        target_allocations = avg_emissions * (1 + target_surplus_ratio)
+        
+        # Calculate required adjustment based on historical performance
+        if avg_allocations > 0:
+            required_adjustment = (target_allocations - avg_allocations) / avg_allocations
+            # Bound the adjustment to prevent extreme changes
+            required_adjustment = max(min(required_adjustment, 0.10), -0.10)
+        else:
+            required_adjustment = 0
+        
+        print(f"\nRequired Adjustment: {required_adjustment:.4f}")
+        
+        # Apply sector-specific adjustments
+        for sector in self.facilities_data['Sector'].unique():
+            sector_mask = self.facilities_data['Sector'] == sector
+            sector_data = self.facilities_data[sector_mask]
+            
+            # Calculate sector-specific historical metrics
+            sector_historical = {}
+            for prev_year in historical_data.keys():
+                sector_historical[prev_year] = {
+                    'emissions': sector_data[f'Emissions_{prev_year}'].sum(),
+                    'output': sector_data[f'Output_{prev_year}'].sum()
+                }
+            
+            if sector_historical:
+                sector_avg_emissions = sum(data['emissions'] for data in sector_historical.values()) / len(sector_historical)
+                sector_avg_output = sum(data['output'] for data in sector_historical.values()) / len(sector_historical)
+            else:
+                sector_avg_emissions = sector_data[f'Emissions_{year}'].sum()
+                sector_avg_output = sector_data[f'Output_{year}'].sum()
+            
+            # Calculate sector intensity relative to average
+            sector_intensity = sector_avg_emissions / sector_avg_output if sector_avg_output > 0 else 0
+            average_intensity = avg_emissions / avg_output if avg_output > 0 else 0
+            
+            # Adjust sector benchmark based on:
+            # 1. Overall market adjustment needed
+            # 2. Sector's historical intensity vs average
+            sector_adjustment = required_adjustment
+            
+            if average_intensity > 0:
+                intensity_factor = sector_intensity / average_intensity
+                if intensity_factor > 1:
+                    # Higher intensity sectors get stronger reduction
+                    sector_adjustment *= 1.2
+                else:
+                    # Lower intensity sectors get lighter reduction
+                    sector_adjustment *= 0.8
+            
+            # Apply the adjustment to sector benchmarks for next two years
+            current_benchmarks = self.facilities_data.loc[sector_mask, f'Benchmark_{year}']
+            new_benchmarks = current_benchmarks * (1 + sector_adjustment)
+            
+            # Update current year
+            self.facilities_data.loc[sector_mask, f'Benchmark_{year}'] = new_benchmarks
+            
+            # Update next year's benchmarks if not the last year
+            if year < self.end_year:
+                self.facilities_data.loc[sector_mask, f'Benchmark_{year+1}'] = new_benchmarks
+            
+            print(f"\nSector: {sector}")
+            print(f"Historical Intensity: {sector_intensity:.4f}")
+            print(f"Adjustment Applied: {sector_adjustment:.4f}")
+        
+        # Recalculate allocations with new benchmarks
+        self.facilities_data[f'Allocations_{year}'] = (
+            self.facilities_data[f'Output_{year}'] * 
+            self.facilities_data[f'Benchmark_{year}']
+        )
+        
+        # Update allowance positions
+        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
+            self.facilities_data[f'Allocations_{year}'] - 
+            self.facilities_data[f'Emissions_{year}']
+        )
+        
+        # Print final verification
+        final_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        final_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        final_surplus_ratio = (final_allocations - final_emissions) / final_emissions if final_emissions > 0 else 0
+        
+        print("\nFinal Market Balance:")
+        print(f"Total Allocations: {final_allocations:,.2f}")
+        print(f"Total Emissions: {final_emissions:,.2f}")
+        print(f"Surplus Ratio: {final_surplus_ratio:.4f}")
+
+    def integrate_periodic_adjustment(self, year: int) -> Tuple[float, float]:
+        """
+        Integration point for periodic benchmark adjustment in the main model execution.
+        """
+        # Calculate initial values
+        self.calculate_dynamic_values(year)
+        
+        # Apply periodic benchmark adjustment
+        self.adjust_benchmarks_with_rolling_average(year)
+        
+        # Return updated market positions
+        return self.calculate_market_positions(year) 
+    
     def calculate_market_positions(self, year: int) -> Tuple[float, float]:
         """Calculate current market positions."""
         # Calculate total supply (positive positions)
