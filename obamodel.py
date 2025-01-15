@@ -310,89 +310,68 @@ class obamodel:
         """Calculate dynamic values using facility-specific baseline benchmarks."""
         years_elapsed = year - self.start_year
         print(f"\n=== Dynamic Value Analysis for Year {year} ===")
-        print(f"MSR Status: {'Active' if self.msr_active else 'Inactive'}")
-        
-        # Calculate emissions intensity
-        if year > self.start_year:
-            prior_emissions = self.facilities_data[f'Emissions_{year - 1}']
-            prior_abatement = self.facilities_data.get(f'Tonnes Abated_{year - 1}', 0)
-            prior_output = self.facilities_data[f'Output_{year - 1}']
-            emissions_intensity = ((prior_emissions - prior_abatement) / prior_output).clip(lower=0)
-        else:
-            emissions_intensity = (
-                self.facilities_data['Baseline Emissions'] /
-                self.facilities_data['Baseline Output']
-            )
-        
-        # Calculate output with growth rate
+    
+        # 1. First calculate output with growth rate
         self.facilities_data[f'Output_{year}'] = (
             self.facilities_data['Baseline Output'] *
             (1 + self.output_growth_rate) ** years_elapsed
         )
-        
-        # Calculate emissions with growth rate
+    
+        # 2. Calculate emissions using baseline emissions and growth rate
         self.facilities_data[f'Emissions_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * 
-            emissions_intensity *
+            self.facilities_data['Baseline Emissions'] *
             (1 + self.emissions_growth_rate) ** years_elapsed
-        ).clip(lower=0)
+        )
+    
+        # 3. Calculate current total emissions for ratchet calculation
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         
-        # Calculate benchmarks with ratchet rate - FIXED THIS SECTION
-        # Apply ratchet rate more aggressively
+        # 4. Define target and calculate required ratchet
+        target_surplus_ratio = 0.05  # 5% oversupply target
+        target_surplus = total_emissions * (1 + target_surplus_ratio)
+        
+        # 5. Calculate initial allocations using baseline benchmark
+        initial_allocations = (
+            self.facilities_data[f'Output_{year}'] * 
+            self.facilities_data['Baseline Benchmark']
+        ).sum()
+        
+        # 6. Compute required ratchet adjustment
+        if initial_allocations > 0:  # Prevent division by zero
+            allocation_decline_rate = (initial_allocations - target_surplus) / initial_allocations
+            required_ratchet_rate = allocation_decline_rate / max(1, years_elapsed)
+            bounded_ratchet_rate = np.clip(required_ratchet_rate, 0.01, 0.20)
+        else:
+            bounded_ratchet_rate = 0.01  # Default minimum ratchet if we can't calculate
+        
+        print(f"\nRatchet Rate Calculation:")
+        print(f"Initial Allocations: {initial_allocations:,.2f}")
+        print(f"Total Emissions: {total_emissions:,.2f}")
+        print(f"Target Surplus: {target_surplus:,.2f}")
+        print(f"Applied Ratchet Rate: {bounded_ratchet_rate:.4f}")
+        
+        # 7. Calculate final benchmark with ratchet
         self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] * 
-            (1 - self.facilities_data['Benchmark Ratchet Rate']) ** years_elapsed
+            self.facilities_data['Baseline Benchmark'] *
+            (1 - bounded_ratchet_rate) ** years_elapsed
         )
         
-        # Calculate allocations based on ratcheted benchmark
+        # 8. Calculate final allocations
         self.facilities_data[f'Allocations_{year}'] = (
             self.facilities_data[f'Output_{year}'] * 
             self.facilities_data[f'Benchmark_{year}']
         )
         
-        # Calculate market position
-        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
-        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-        current_surplus_ratio = (total_allocations - total_emissions) / total_allocations if total_allocations > 0 else 0
-        
-        # MSR adjustments if active
-        adjustment_factor = 1.0
-        if self.msr_active:
-            if current_surplus_ratio > self.msr_upper_threshold:
-                # Too much surplus - tighten benchmarks
-                adjustment_factor = (1 + self.msr_upper_threshold) / (1 + current_surplus_ratio)
-                print(f"MSR: Surplus ({current_surplus_ratio:.4f}) above threshold - tightening")
-            elif current_surplus_ratio < self.msr_lower_threshold:
-                # Too much deficit - loosen benchmarks
-                adjustment_factor = (1 + self.msr_lower_threshold) / (1 + current_surplus_ratio)
-                print(f"MSR: Surplus ({current_surplus_ratio:.4f}) below threshold - loosening")
-            
-            if adjustment_factor != 1.0:
-                self.facilities_data[f'Benchmark_{year}'] *= adjustment_factor
-                self.facilities_data[f'Allocations_{year}'] *= adjustment_factor
-                
-                # Recalculate market position after MSR
-                total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
-                current_surplus_ratio = (total_allocations - total_emissions) / total_allocations
-        
-        # Calculate and store surplus/deficit
+        # 9. Calculate and store surplus/deficit
         self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
-        
-        # Store MSR metrics if active
-        if self.msr_active:
-            self.facilities_data[f'MSR_Adjustment_{year}'] = adjustment_factor
-        
-        # Report results
-        print(f"\nYear {year} Results:")
+    
+        print(f"\nFinal Results for Year {year}:")
         print(f"Total Emissions: {total_emissions:,.2f}")
-        print(f"Total Allocations: {total_allocations:,.2f}")
-        print(f"Surplus Ratio: {current_surplus_ratio:.4f}")
+        print(f"Total Allocations: {self.facilities_data[f'Allocations_{year}'].sum():,.2f}")
         print(f"Average Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():.6f}")
-        if self.msr_active:
-            print(f"MSR Adjustment: {adjustment_factor:.4f}")
             
     def calculate_market_positions(self, year: int) -> Tuple[float, float]:
         """Calculate current market positions."""
