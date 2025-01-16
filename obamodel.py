@@ -984,25 +984,21 @@ class obamodel:
         except Exception as e:
             print(f"Error in MSR scenario: {str(e)}")
             return 0.0, 0.0  # Return default values on error
-                
-            except Exception as e:
-                print(f"Error in MSR scenario: {str(e)}")
-                return 0.0, 0.0  # Return default values on error
-
+        
     def _calculate_stability_metric(self, market_summary: pd.DataFrame) -> float:
         """Calculate price stability metric from market summary."""
-                    if len(market_summary) <= 1:
-                        return 1.0
-                        
-                    price_changes = []
-                    for i in range(len(market_summary) - 1):
-                        current_price = market_summary.iloc[i]['Market_Price']
-                        next_price = market_summary.iloc[i + 1]['Market_Price']
-                        if current_price > 0:
-                            change = abs(next_price - current_price) / current_price
-                            price_changes.append(change)
-                    
-                    return 1 - (sum(price_changes) / len(price_changes)) if price_changes else 1.0            
+        if len(market_summary) <= 1:
+            return 1.0
+            
+        price_changes = []
+        for i in range(len(market_summary) - 1):
+            current_price = market_summary.iloc[i]['Market_Price']
+            next_price = market_summary.iloc[i + 1]['Market_Price']
+            if current_price > 0:
+                change = abs(next_price - current_price) / current_price
+                price_changes.append(change)
+        
+        return 1 - (sum(price_changes) / len(price_changes)) if price_changes else 1.0
     
     def _calculate_balance_metric(self, market_summary: pd.DataFrame) -> float:
         """Calculate market balance metric from market summary."""
