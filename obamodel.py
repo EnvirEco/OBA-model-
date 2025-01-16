@@ -238,12 +238,14 @@ class obamodel:
         print(f"First year columns present: {all(f'{m}_{self.start_year}' in self.facilities_data.columns for m in metrics)}")
         print(f"Last year columns present: {all(f'{m}_{self.end_year}' in self.facilities_data.columns for m in metrics)}")
         
-    
-  # 2. Core Market Mechanisms
-# 1. Core Model Execution Methods
-
-    def run_model(self, output_file: str = "results.csv") -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Main entry point that orchestrates the entire model execution."""
+   
+  
+# 3. Core Model Execution Methods
+    def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Main entry point that orchestrates the entire model execution.
+        Returns tuple of (market_summary_df, sector_summary_df, facility_results)
+        """
         print("Running emissions trading model...")
         market_summary = []
         sector_summaries = []
@@ -251,52 +253,189 @@ class obamodel:
         for year in range(self.start_year, self.end_year + 1):
             print(f"\nProcessing year {year}...")
             
-            # 1. Calculate initial positions and benchmarks through periodic adjustment
-            total_supply, total_demand = self.integrate_periodic_adjustment(year)
+            # 1. Calculate initial positions 
+            self.calculate_dynamic_values(year)
             
-            # 2. Initial market analysis
-            initial_price = self.determine_market_price(total_supply, total_demand, year)
-            
-            # 3. Calculate abatement based on price signal
-            self.calculate_abatement(year)
-            
-            # 4. Recalculate market positions after abatement
-            post_abatement_supply, post_abatement_demand = self.calculate_market_positions(year)
-            
-            # 5. Update price based on post-abatement positions
-            final_price = self.determine_market_price(post_abatement_supply, post_abatement_demand, year)
-            
-            # 6. Execute trades at final price
-            self.trade_allowances(year)
-            
-            # 7. Calculate final costs and metrics
-            self.calculate_costs(year)
-            self.calculate_cost_ratios(year)
-            
-            # 8. Analyze market stability
-            self.analyze_market_stability(year)
-            
-            # 9. Create summaries for this year
-            market_summary.append(self._create_market_summary(year))
             try:
+                # 2. Initial market positions - Add error handling
+                market_positions = self.calculate_market_positions(year)
+                if not isinstance(market_positions, tuple) or len(market_positions) != 2:
+                    raise ValueError(f"Invalid market positions return value: {market_positions}")
+                total_supply, total_demand = market_positions
+                
+                # 3. Determine initial market price
+                self.determine_market_price(total_supply, total_demand, year)
+                
+                # 4. Calculate abatement based on price signal
+                self.calculate_abatement(year)
+                
+                # 5. Recalculate market positions after abatement - Add error handling
+                market_positions = self.calculate_market_positions(year)
+                if not isinstance(market_positions, tuple) or len(market_positions) != 2:
+                    raise ValueError(f"Invalid post-abatement market positions: {market_positions}")
+                post_abatement_supply, post_abatement_demand = market_positions
+                
+                # 6. Update price based on post-abatement positions
+                self.determine_market_price(post_abatement_supply, post_abatement_demand, year)
+                
+                # Continue with rest of processing...
+                self.trade_allowances(year)
+                self.calculate_costs(year)
+                self.calculate_cost_ratios(year)
+                
+                # Create summaries
+                market_summary.append(self._create_market_summary(year))
                 sector_summary = self.create_sector_summary(year)
                 sector_summaries.append(sector_summary)
+                
+                # Analyze stability
+                self.analyze_market_stability(year)
+                
             except Exception as e:
-                print(f"Warning: Error creating sector summary for year {year}: {str(e)}")
+                print(f"Error processing year {year}: {str(e)}")
                 continue
         
-        # Convert to DataFrames
-        market_summary_df = pd.DataFrame(market_summary)
+        # Convert summaries to DataFrames
+        market_summary_df = pd.DataFrame(market_summary) if market_summary else pd.DataFrame()
         sector_summary_df = pd.concat(sector_summaries, ignore_index=True) if sector_summaries else pd.DataFrame()
         facility_results = self._prepare_facility_results(self.start_year, self.end_year)
         
-        # Save results
-        try:
-            self._save_results_to_files(market_summary_df, sector_summary_df, facility_results, output_file)
-        except Exception as e:
-            print(f"Warning: Error saving results: {str(e)}")
-        
         return market_summary_df, sector_summary_df, facility_results
+    
+    def validate_scenario_parameters(self, scenario_type: str, params: Dict) -> bool:
+        """Validate parameters for any scenario type"""
+        # Base parameter validation
+        base_params = {
+            'floor_price': (0, None),  # No upper limit
+            'ceiling_price': (0, None),
+            'price_increment': (0, None),
+            'output_growth_rate': (-0.5, 0.5),
+            'emissions_growth_rate': (-0.5, 0.5),
+            'benchmark_ratchet_rate': (0, 1)
+        }
+        
+        # Validate base parameters first
+        for param, (min_val, max_val) in base_params.items():
+            value = params.get(param)
+            if value is None:
+                print(f"Missing required parameter: {param}")
+                return False
+            if not isinstance(value, (int, float)):
+                print(f"Parameter {param} must be numeric")
+                return False
+            if min_val is not None and value < min_val:
+                print(f"Parameter {param} must be >= {min_val}")
+                return False
+            if max_val is not None and value > max_val:
+                print(f"Parameter {param} must be <= {max_val}")
+                return False
+
+        # MSR-specific validation
+        if scenario_type == 'msr':
+            msr_params = {
+                'msr_upper_threshold': (0, 1),
+                'msr_lower_threshold': (-1, 0),
+                'msr_adjustment_rate': (0, 1)
+            }
+            
+            for param, (min_val, max_val) in msr_params.items():
+                value = params.get(param)
+                if value is None:
+                    print(f"Missing required MSR parameter: {param}")
+                    return False
+                if not isinstance(value, (int, float)):
+                    print(f"MSR parameter {param} must be numeric")
+                    return False
+                if value < min_val or value > max_val:
+                    print(f"MSR parameter {param} must be between {min_val} and {max_val}")
+                    return False
+            
+            if params['msr_upper_threshold'] <= params['msr_lower_threshold']:
+                print("MSR upper threshold must be greater than lower threshold")
+                return False
+                
+        return True
+    
+    def run_msr_scenario(self) -> Tuple[float, float]:
+        """
+        Run MSR scenario and return stability metrics.
+        """
+        try:
+            # Run through main scenario handler
+            result = self.run_scenario('msr')
+            
+            # Just extract the metrics we want
+            if isinstance(result, dict) and 'metrics' in result:
+                return (
+                    result['metrics'].get('stability', 0.0),
+                    result['metrics'].get('balance', 0.0)
+                )
+            return 0.0, 0.0
+            
+        except Exception as e:
+            print(f"Error in MSR scenario: {str(e)}")
+            return 0.0, 0.0
+
+    def run_scenario(self, scenario_type: str, params: Dict = None) -> Dict:
+        """Single entry point for running any scenario type"""
+        if params is None:
+            params = {}
+            
+        # Set up parameters
+        scenario_params = {
+            'floor_price': params.get('floor_price', self.floor_price),
+            'ceiling_price': params.get('ceiling_price', self.ceiling_price),
+            'price_increment': params.get('price_increment', self.price_increment),
+            'output_growth_rate': params.get('output_growth_rate', self.output_growth_rate),
+            'emissions_growth_rate': params.get('emissions_growth_rate', self.emissions_growth_rate),
+            'benchmark_ratchet_rate': params.get('benchmark_ratchet_rate', 0.02)
+        }
+        
+        if scenario_type == 'msr':
+            scenario_params['msr_active'] = True
+            scenario_params['msr_upper_threshold'] = params.get('msr_upper_threshold', self.msr_upper_threshold)
+            scenario_params['msr_lower_threshold'] = params.get('msr_lower_threshold', self.msr_lower_threshold)
+            scenario_params['msr_adjustment_rate'] = params.get('msr_adjustment_rate', self.msr_adjustment_rate)
+        else:
+            scenario_params['msr_active'] = False
+        
+        try:
+            print(f"\nExecuting {scenario_type} scenario...")
+            # Run core model
+            market_summary, sector_summary, facility_results = self.run_model()
+            
+            # Calculate metrics (these need to be defined elsewhere in the class)
+            metrics = {
+                'stability': 1.0 - (market_summary['Market_Price'].std() / market_summary['Market_Price'].mean() if market_summary['Market_Price'].mean() > 0 else 0),
+                'balance': market_summary['Market_Balance_Ratio'].mean() if 'Market_Balance_Ratio' in market_summary.columns else 0
+            }
+            
+            return {
+                'type': scenario_type,
+                'parameters': scenario_params,
+                'market_summary': market_summary,
+                'sector_summary': sector_summary,
+                'facility_results': facility_results,
+                'metrics': metrics
+            }
+            
+        except Exception as e:
+            print(f"Error in scenario execution: {str(e)}")
+            return self._empty_scenario_result(scenario_type, scenario_params)
+    
+    def _empty_scenario_result(self, scenario_type: str, params: Dict) -> Dict:
+        """Return empty result structure for failed scenarios"""
+        return {
+            'type': scenario_type,
+            'parameters': params,
+            'market_summary': pd.DataFrame(),
+            'sector_summary': pd.DataFrame(),
+            'facility_results': pd.DataFrame(),
+            'metrics': {
+                'stability': 0.0,
+                'balance': 0.0
+            }
+        }
 
     def integrate_periodic_adjustment(self, year: int) -> Tuple[float, float]:
         """Integration point for periodic benchmark adjustment in the main model execution."""
@@ -817,39 +956,40 @@ class obamodel:
         print(f"Supply: {final_supply:.4f}")
         print(f"Demand: {final_demand:.4f}")
         print(f"Imbalance: {abs(final_supply - final_demand):.4f}")
-    
-        def debug_trade_conditions(self, year: int) -> None:
-            """Debug why trades are not occurring by checking key conditions."""
-            print(f"\n=== Trade Debug Analysis for Year {year} ===")
+
+    def debug_trade_conditions(self, year: int) -> None:
+        """Debug why trades are not occurring by checking key conditions."""
+        print(f"\n=== Trade Debug Analysis for Year {year} ===")
+        
+        # Check market positions
+        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        buyers = self.facilities_data[positions < 0]
+        sellers = self.facilities_data[positions > 0]
+        
+        print("\nMarket Position Analysis:")
+        print(f"Total facilities: {len(self.facilities_data)}")
+        print(f"Number of buyers: {len(buyers)}")
+        print(f"Number of sellers: {len(sellers)}")
+        print(f"Total demand: {abs(positions[positions < 0].sum()):.2f}")
+        print(f"Total supply: {positions[positions > 0].sum():.2f}")
+        
+        if len(buyers) == 0 or len(sellers) == 0:
+            print("ERROR: Missing buyers or sellers!")
+            return
             
-            # Check market positions
-            positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
-            buyers = self.facilities_data[positions < 0]
-            sellers = self.facilities_data[positions > 0]
-            
-            print("\nMarket Position Analysis:")
-            print(f"Total facilities: {len(self.facilities_data)}")
-            print(f"Number of buyers: {len(buyers)}")
-            print(f"Number of sellers: {len(sellers)}")
-            print(f"Total demand: {abs(positions[positions < 0].sum()):.2f}")
-            print(f"Total supply: {positions[positions > 0].sum():.2f}")
-            
-            if len(buyers) == 0 or len(sellers) == 0:
-                print("ERROR: Missing buyers or sellers!")
-                return
-                
-            # Check price analysis
-            print("\nPrice Analysis:")
-            print(f"Current market price: ${self.market_price:.2f}")
-            
-            # Sample MAC curves and analyze trade potential
-            sample_size = min(5, len(self.abatement_cost_curve))
-            print(f"\nSample of {sample_size} MAC curves:")
-            sample_curves = self.abatement_cost_curve.head(sample_size)
-            for _, curve in sample_curves.iterrows():
-                print(f"Facility {curve['Facility ID']}:")
-                print(f"  Intercept: ${curve['Intercept']:.2f}")
-                print(f"  Slope: {curve['Slope']:.4f}")
+        # Check price analysis
+        print("\nPrice Analysis:")
+        print(f"Current market price: ${self.market_price:.2f}")
+        
+        # Sample MAC curves and analyze trade potential
+        sample_size = min(5, len(self.abatement_cost_curve))
+        print(f"\nSample of {sample_size} MAC curves:")
+        sample_curves = self.abatement_cost_curve.head(sample_size)
+        for _, curve in sample_curves.iterrows():
+            print(f"Facility {curve['Facility ID']}:")
+            print(f"  Intercept: ${curve['Intercept']:.2f}")
+            print(f"  Slope: {curve['Slope']:.4f}")        
+      
 
     def _get_facility_mac(self, facility_id: str, year: int) -> float:
         """Calculate facility's marginal abatement cost at current position."""
@@ -907,107 +1047,8 @@ class obamodel:
         ).replace([float('inf'), -float('inf')], 0).fillna(0)
 
 
-    # . Core Model Execution Methods
-    def run_scenario(self, scenario_type: str, params: Dict = None) -> Dict:
-        """
-        Run a specific scenario type with given parameters.
-        
-        Args:
-            scenario_type: Type of scenario ('base', 'msr', etc.)
-            params: Dictionary of scenario-specific parameters
-        """
-        if params is None:
-            params = {}
-            
-        # Set up scenario parameters
-        scenario_params = {
-            'floor_price': params.get('floor_price', self.floor_price),
-            'ceiling_price': params.get('ceiling_price', self.ceiling_price),
-            'price_increment': params.get('price_increment', 10),
-            'output_growth_rate': params.get('output_growth_rate', 0.01),
-            'emissions_growth_rate': params.get('emissions_growth_rate', 0.01),
-            'benchmark_ratchet_rate': params.get('benchmark_ratchet_rate', 0.02),
-            'msr_active': scenario_type == 'msr'
-        }
-        
-        if scenario_type == 'msr':
-            scenario_params.update({
-                'msr_upper_threshold': params.get('msr_upper_threshold', 0.15),
-                'msr_lower_threshold': params.get('msr_lower_threshold', -0.05),
-                'msr_adjustment_rate': params.get('msr_adjustment_rate', 0.03)
-            })
-        
-        # Store scenario parameters
-        self.scenario_params = scenario_params
-        
-        # Run model and get results
-        market_summary, sector_summary, facility_results = self.run_model()
-        
-        # Calculate scenario-specific metrics
-        stability_metric = self._calculate_stability_metric(market_summary)
-        balance_metric = self._calculate_balance_metric(market_summary)
-        
-        return {
-            'type': scenario_type,
-            'parameters': scenario_params,
-            'market_summary': market_summary,
-            'sector_summary': sector_summary,
-            'facility_results': facility_results,
-            'metrics': {
-                'stability': stability_metric,
-                'balance': balance_metric
-            }
-        }
-    
-    def run_msr_scenario(self) -> Tuple[float, float]:
-        """
-        Run Market Stability Reserve scenario and return key metrics.
-    
-        Returns:
-            Tuple of (stability_metric, balance_metric)
-        """
-        try:
-            # Unpack all three values from run_model
-            market_summary, sector_summary, facility_results = self.run_model("results.csv")
-    
-            # Calculate metrics from market summary results
-            if not market_summary.empty:
-                stability_metric = 1.0 - market_summary['Market_Price'].std() / market_summary['Market_Price'].mean() \
-                                 if market_summary['Market_Price'].mean() > 0 else 0.0
-                balance_metric = market_summary['Market_Balance_Ratio'].mean()
-            else:
-                stability_metric = 0.0
-                balance_metric = 0.0
-    
-            return stability_metric, balance_metric
-    
-        except Exception as e:
-            print(f"Error in MSR scenario: {str(e)}")
-            return 0.0, 0.0  # Return default values on error
-        
-    def _calculate_stability_metric(self, market_summary: pd.DataFrame) -> float:
-        """Calculate price stability metric from market summary."""
-        if len(market_summary) <= 1:
-            return 1.0
-            
-        price_changes = []
-        for i in range(len(market_summary) - 1):
-            current_price = market_summary.iloc[i]['Market_Price']
-            next_price = market_summary.iloc[i + 1]['Market_Price']
-            if current_price > 0:
-                change = abs(next_price - current_price) / current_price
-                price_changes.append(change)
-        
-        return 1 - (sum(price_changes) / len(price_changes)) if price_changes else 1.0
-    
-    def _calculate_balance_metric(self, market_summary: pd.DataFrame) -> float:
-        """Calculate market balance metric from market summary."""
-        if market_summary.empty:
-            return 0.0
-        
-        return market_summary['Market_Balance_Ratio'].mean()
 
-# 2. Data Analysis & Summary Creation Methods
+# 8. Data Analysis & Summary Creation Methods
 
     def _prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
         """
@@ -1122,7 +1163,43 @@ class obamodel:
         ]
             
         return sector_summary[column_order]   
-        
+
+    def _calculate_stability_metric(self, market_summary: pd.DataFrame) -> float:
+        """Calculate price stability metric."""
+        try:
+            if market_summary.empty or 'Market_Price' not in market_summary.columns:
+                return 0.0
+                
+            prices = market_summary['Market_Price']
+            if len(prices) <= 1:
+                return 1.0
+                
+            # Calculate price stability as 1 - coefficient of variation
+            mean_price = prices.mean()
+            if mean_price > 0:
+                return 1.0 - (prices.std() / mean_price)
+            return 0.0
+            
+        except Exception as e:
+            print(f"Error calculating stability metric: {str(e)}")
+            return 0.0
+
+    def _calculate_balance_metric(self, market_summary: pd.DataFrame) -> float:
+        """Calculate market balance metric."""
+        try:
+            if market_summary.empty or 'Market_Balance_Ratio' not in market_summary.columns:
+                return 0.0
+                
+            # Use average absolute deviation from target balance
+            target_balance = 0.05  # 5% surplus target
+            balance_ratios = market_summary['Market_Balance_Ratio']
+            
+            return 1.0 - abs(balance_ratios.mean() - target_balance)
+            
+        except Exception as e:
+            print(f"Error calculating balance metric: {str(e)}")
+            return 0.0
+    
     def _create_market_summary(self, year: int) -> Dict:
         """Create system-wide market summary for a given year."""
         if f'Allowance Surplus/Deficit_{year}' not in self.facilities_data.columns:
