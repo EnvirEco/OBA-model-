@@ -614,6 +614,7 @@ class obamodel:
         
         return total_supply, total_demand
 
+   
     def analyze_market_stability(self, year: int) -> None:
         """Analyze market stability with sector-specific reporting."""
         print(f"\n=== Market Stability Analysis Year {year} ===")
@@ -650,7 +651,7 @@ class obamodel:
                     
                 except Exception as e:
                     print(f"  Error calculating changes: {str(e)}")
-
+                    
     def analyze_trading_conditions(self, year: int) -> None:
         """Analyze market conditions affecting trade volumes and costs."""
         print(f"\n=== Detailed Market Analysis for Year {year} ===")
