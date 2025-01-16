@@ -377,9 +377,31 @@ class obamodel:
             return 0.0, 0.0
 
     def run_scenario(self, scenario_type: str, params: Dict = None) -> Dict:
-        """Single entry point for running any scenario type"""
-        if params is None:
-            params = {}
+        """Run all scenarios and save results."""
+        print("Starting scenario analysis...")
+    
+        # Define fixed paths
+        base_dir = Path(r"C:\Users\user\AppData\Local\Programs\Python\Python313\OBA_test")
+        scenario_file = base_dir / "scenarios" / "scenarios.csv"  # Updated path
+        facilities_file = base_dir / "data" / "input" / "facilities" / "facilities_data.csv"
+        abatement_file = base_dir / "data" / "input" / "facilities" / "abatement_cost_curve.csv"
+        results_dir = base_dir / "results"  # Updated path
+    
+        # Verify paths
+        print("\nFile paths:")
+        print(f"Scenarios file: {scenario_file}")
+        print(f"Facilities file: {facilities_file}")
+        print(f"Abatement file: {abatement_file}")
+        print(f"Results directory: {results_dir}")
+    
+        # Ensure results directory exists
+        try:
+            results_dir.mkdir(exist_ok=True, parents=True)
+        except Exception as e:
+            print(f"Error creating results directory: {e}")
+            return None"""Single entry point for running any scenario type"""
+            if params is None:
+                params = {}
             
         # Set up parameters
         scenario_params = {
