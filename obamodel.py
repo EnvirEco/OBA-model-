@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple
 import os
+from pathlib import Path
 
 class obamodel:
     # 1. Initialization and Setup
@@ -377,15 +378,17 @@ class obamodel:
             return 0.0, 0.0
 
     def run_scenario(self, scenario_type: str, params: Dict = None) -> Dict:
-        """Run all scenarios and save results."""
+        """
+        Single entry point for running any scenario type.
+        """
         print("Starting scenario analysis...")
     
         # Define fixed paths
         base_dir = Path(r"C:\Users\user\AppData\Local\Programs\Python\Python313\OBA_test")
-        scenario_file = base_dir / "scenarios" / "scenarios.csv"  # Updated path
+        scenario_file = base_dir / "scenarios" / "scenarios.csv"
         facilities_file = base_dir / "data" / "input" / "facilities" / "facilities_data.csv"
         abatement_file = base_dir / "data" / "input" / "facilities" / "abatement_cost_curve.csv"
-        results_dir = base_dir / "results"  # Updated path
+        results_dir = base_dir / "results"
     
         # Verify paths
         print("\nFile paths:")
@@ -399,10 +402,11 @@ class obamodel:
             results_dir.mkdir(exist_ok=True, parents=True)
         except Exception as e:
             print(f"Error creating results directory: {e}")
-            return None"""Single entry point for running any scenario type"""
-            if params is None:
-                params = {}
-            
+            return None
+    
+        if params is None:
+            params = {}
+    
         # Set up parameters
         scenario_params = {
             'floor_price': params.get('floor_price', self.floor_price),
@@ -412,7 +416,7 @@ class obamodel:
             'emissions_growth_rate': params.get('emissions_growth_rate', self.emissions_growth_rate),
             'benchmark_ratchet_rate': params.get('benchmark_ratchet_rate', 0.02)
         }
-        
+    
         if scenario_type == 'msr':
             scenario_params['msr_active'] = True
             scenario_params['msr_upper_threshold'] = params.get('msr_upper_threshold', self.msr_upper_threshold)
@@ -420,18 +424,18 @@ class obamodel:
             scenario_params['msr_adjustment_rate'] = params.get('msr_adjustment_rate', self.msr_adjustment_rate)
         else:
             scenario_params['msr_active'] = False
-        
+    
         try:
             print(f"\nExecuting {scenario_type} scenario...")
             # Run core model
             market_summary, sector_summary, facility_results = self.run_model()
-            
+    
             # Calculate metrics (these need to be defined elsewhere in the class)
             metrics = {
                 'stability': 1.0 - (market_summary['Market_Price'].std() / market_summary['Market_Price'].mean() if market_summary['Market_Price'].mean() > 0 else 0),
                 'balance': market_summary['Market_Balance_Ratio'].mean() if 'Market_Balance_Ratio' in market_summary.columns else 0
             }
-            
+    
             return {
                 'type': scenario_type,
                 'parameters': scenario_params,
@@ -440,11 +444,11 @@ class obamodel:
                 'facility_results': facility_results,
                 'metrics': metrics
             }
-            
+    
         except Exception as e:
             print(f"Error in scenario execution: {str(e)}")
             return self._empty_scenario_result(scenario_type, scenario_params)
-    
+        
     def _empty_scenario_result(self, scenario_type: str, params: Dict) -> Dict:
         """Return empty result structure for failed scenarios"""
         return {
