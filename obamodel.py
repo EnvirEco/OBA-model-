@@ -962,14 +962,14 @@ class obamodel:
     def run_msr_scenario(self) -> Tuple[float, float]:
         """
         Run Market Stability Reserve scenario and return key metrics.
-        
+    
         Returns:
             Tuple of (stability_metric, balance_metric)
         """
         try:
             # Unpack all three values from run_model
             market_summary, sector_summary, facility_results = self.run_model("results.csv")
-            
+    
             # Calculate metrics from market summary results
             if not market_summary.empty:
                 stability_metric = 1.0 - market_summary['Market_Price'].std() / market_summary['Market_Price'].mean() \
@@ -978,27 +978,31 @@ class obamodel:
             else:
                 stability_metric = 0.0
                 balance_metric = 0.0
-                
+    
             return stability_metric, balance_metric
-            
+    
         except Exception as e:
             print(f"Error in MSR scenario: {str(e)}")
             return 0.0, 0.0  # Return default values on error
+                
+            except Exception as e:
+                print(f"Error in MSR scenario: {str(e)}")
+                return 0.0, 0.0  # Return default values on error
 
     def _calculate_stability_metric(self, market_summary: pd.DataFrame) -> float:
-            """Calculate price stability metric from market summary."""
-            if len(market_summary) <= 1:
-                return 1.0
-                
-            price_changes = []
-            for i in range(len(market_summary) - 1):
-                current_price = market_summary.iloc[i]['Market_Price']
-                next_price = market_summary.iloc[i + 1]['Market_Price']
-                if current_price > 0:
-                    change = abs(next_price - current_price) / current_price
-                    price_changes.append(change)
-            
-            return 1 - (sum(price_changes) / len(price_changes)) if price_changes else 1.0
+        """Calculate price stability metric from market summary."""
+                    if len(market_summary) <= 1:
+                        return 1.0
+                        
+                    price_changes = []
+                    for i in range(len(market_summary) - 1):
+                        current_price = market_summary.iloc[i]['Market_Price']
+                        next_price = market_summary.iloc[i + 1]['Market_Price']
+                        if current_price > 0:
+                            change = abs(next_price - current_price) / current_price
+                            price_changes.append(change)
+                    
+                    return 1 - (sum(price_changes) / len(price_changes)) if price_changes else 1.0            
     
     def _calculate_balance_metric(self, market_summary: pd.DataFrame) -> float:
         """Calculate market balance metric from market summary."""
