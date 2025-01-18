@@ -735,7 +735,7 @@ class obamodel:
         
         return mac_points  
 
-      def calculate_abatement(self, year: int) -> None:
+    def calculate_abatement(self, year: int) -> None:
         """Calculate profit-maximizing abatement for each facility and adjust emissions accordingly."""
         print(f"\n=== Abatement Analysis for Year {year} ===")
         print(f"Market Price: ${self.market_price:.2f}")
