@@ -460,6 +460,7 @@ class obamodel:
         return self.calculate_market_positions(year)
 
 # 2. Dynamic Value Calculations
+
     def calculate_dynamic_values(self, year: int) -> None:
         """Calculate base values letting market balance emerge naturally."""
         print(f"\nCalculating values for year {year}")
@@ -471,10 +472,15 @@ class obamodel:
             (1 + self.output_growth_rate) ** years_elapsed
         )
         
+        # Calculate emissions growth and subtract abatement
         self.facilities_data[f'Emissions_{year}'] = (
             self.facilities_data['Baseline Emissions'] *
             (1 + self.emissions_growth_rate) ** years_elapsed
         )
+        
+        # Subtract abatement from emissions
+        if f'Tonnes Abated_{year}' in self.facilities_data.columns:
+            self.facilities_data[f'Emissions_{year}'] -= self.facilities_data[f'Tonnes Abated_{year}']
         
         # 2. Apply benchmark ratchet to baseline benchmarks
         self.facilities_data[f'Benchmark_{year}'] = (
@@ -503,7 +509,7 @@ class obamodel:
         print(f"Emissions: {total_emissions:.2f}")
         print(f"Allocations: {total_allocations:.2f}")
         print(f"Market Balance: {market_balance:.4f}")
-        print(f"Average Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():.6f}") 
+        print(f"Average Benchmark: {self.facilities_data[f'Benchmark_{year}'].mean():.6f}")    
 
     def adjust_benchmarks_with_rolling_average(self, year: int) -> None:
         """Adjust benchmarks every two years based on rolling averages of historical data."""
@@ -534,10 +540,9 @@ class obamodel:
             avg_emissions = self.facilities_data[f'Emissions_{year}'].sum()
             avg_allocations = self.facilities_data[f'Allocations_{year}'].sum()
             avg_output = self.facilities_data[f'Output_{year}'].sum()
-            
-        # Calculate target metrics
-        target_surplus_ratio = 0.05
-        target_allocations = avg_emissions * (1 + target_surplus_ratio)
+        
+        # Calculate target allocations without surplus ratio
+        target_allocations = avg_emissions
         
         if avg_allocations > 0:
             required_adjustment = (target_allocations - avg_allocations) / avg_allocations
@@ -593,9 +598,7 @@ class obamodel:
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
-
-# 3. Market Position Analysis
-
+           
     def calculate_market_positions(self, year: int) -> Tuple[float, float]:
         """Calculate market positions with better logging."""
         print("\nCalculating market positions")
@@ -676,146 +679,16 @@ class obamodel:
 
 # 4. Price Determination and Abatement
 
-    def determine_market_price(self, supply: float, demand: float, year: int) -> float:
-        """Determine market price from marginal abatement cost curves and market balance."""
-        print(f"\n=== Market Price Determination for Year {year} ===")
-        print(f"Supply: {supply:.2f}")
-        print(f"Demand: {demand:.2f}")
-        print(f"Net Shortage: {(demand - supply):.2f}")
-        
-        # If market is balanced/long, start from floor but consider selling costs
-        if supply >= demand:
-            # Find minimum profitable selling price
-            min_sell_price = float('inf')
-            for _, facility in self.facilities_data.iterrows():
-                if facility[f'Allowance Surplus/Deficit_{year}'] > 0:
-                    curve = self.abatement_cost_curve[
-                        self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                    ]
-                    if not curve.empty:
-                        min_sell_price = min(min_sell_price, float(curve.iloc[0]['Intercept']))
-            
-            clearing_price = max(self.floor_price, min_sell_price / 2)
-            self.market_price = clearing_price
-            print(f"Market is long - price set to: ${clearing_price:.2f}")
-            return clearing_price
-        
-        # Market is short - find clearing price from MAC curves
-        needed_abatement = demand - supply
-        print(f"Market is short - need {needed_abatement:.2f} abatement")
-        
-        # Build array of possible clearing prices
-        clearing_prices = [self.floor_price]  # Start with floor
-        
-        # Add MAC-based prices
-        for _, facility in self.facilities_data.iterrows():
-            # Skip if no emissions to abate
-            if facility[f'Emissions_{year}'] <= 0:
-                continue
-                
-            curve = self.abatement_cost_curve[
-                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ]
-            if curve.empty:
-                continue
-                
-            curve = curve.iloc[0]
-            intercept = float(curve['Intercept'])
-            slope = float(curve['Slope'])
-            max_reduction = min(
-                float(curve['Max Reduction (MTCO2e)']),
-                facility[f'Emissions_{year}']
-            )
-            
-            # Add facility's MAC curve prices
-            if slope > 0:
-                # Price at start of abatement
-                if intercept > 0:
-                    clearing_prices.append(intercept)
-                
-                # Price at max abatement
-                max_price = intercept + (slope * max_reduction)
-                if max_price <= self.ceiling_price:
-                    clearing_prices.append(max_price)
-                
-                # Add intermediate points
-                for pct in [0.25, 0.5, 0.75]:
-                    price = intercept + (slope * max_reduction * pct)
-                    if price <= self.ceiling_price:
-                        clearing_prices.append(price)
-        
-        # Add ceiling price and some points below
-        clearing_prices.append(self.ceiling_price)
-        
-        # Sort and deduplicate
-        clearing_prices = sorted(set(clearing_prices))
-        print(f"\nTesting {len(clearing_prices)} price points...")
-        
-        # Find clearing price
-        best_price = self.ceiling_price
-        best_gap = float('inf')
-        
-        for price in clearing_prices:
-            potential_abatement = 0
-            abatement_costs = []
-            
-            # Calculate total abatement at this price
-            for _, facility in self.facilities_data.iterrows():
-                # Skip if no emissions
-                if facility[f'Emissions_{year}'] <= 0:
-                    continue
-                    
-                curve = self.abatement_cost_curve[
-                    self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                ]
-                if curve.empty:
-                    continue
-                    
-                curve = curve.iloc[0]
-                slope = float(curve['Slope'])
-                intercept = float(curve['Intercept'])
-                max_reduction = min(
-                    float(curve['Max Reduction (MTCO2e)']),
-                    facility[f'Emissions_{year}']
-                )
-                
-                if slope > 0 and price > intercept:
-                    # Calculate economic abatement
-                    econ_abatement = min(
-                        max_reduction,
-                        (price - intercept) / slope
-                    )
-                    
-                    if econ_abatement > 0:
-                        # Calculate average cost
-                        total_cost = (slope * econ_abatement * econ_abatement / 2) + (intercept * econ_abatement)
-                        avg_cost = total_cost / econ_abatement
-                        
-                        # Only count if profitable
-                        if avg_cost < price:
-                            potential_abatement += econ_abatement
-                            abatement_costs.append(avg_cost)
-            
-            # Check how well this price balances the market
-            gap = abs(potential_abatement - needed_abatement)
-            print(f"Price ${price:.2f} -> Abatement: {potential_abatement:.2f} (gap: {gap:.2f})")
-            
-            if gap < best_gap:
-                best_gap = gap
-                best_price = price
-                
-            # Stop if we've found sufficient abatement
-            if potential_abatement >= needed_abatement:
-                break
-        
-        # Set final price
-        self.market_price = best_price
-        print(f"\nFinal Price Analysis:")
-        print(f"Clearing Price: ${best_price:.2f}")
-        print(f"Target Abatement: {needed_abatement:.2f}")
-        print(f"Price Gap: {best_gap:.2f}")
-        
-        return best_price
+    def determine_market_price(self, supply, demand):
+        if demand <= 0:
+            self.market_price = 0
+        elif supply == 0:
+            supply = 1  # Avoid division by zero
+            self.market_price = 100 / supply
+        else:
+            supply_demand_ratio = supply / demand
+            self.market_price = 100 / supply_demand_ratio
+        print(f"Determined Market Price: {self.market_price}")  
     
     def _build_mac_curve(self, year: int) -> List[float]:
         """Build MAC curve with facility-specific characteristics."""
@@ -862,8 +735,8 @@ class obamodel:
         
         return mac_points  
 
-     def calculate_abatement(self, year: int) -> None:
-        """Calculate profit-maximizing abatement for each facility."""
+      def calculate_abatement(self, year: int) -> None:
+        """Calculate profit-maximizing abatement for each facility and adjust emissions accordingly."""
         print(f"\n=== Abatement Analysis for Year {year} ===")
         print(f"Market Price: ${self.market_price:.2f}")
         
@@ -954,7 +827,7 @@ class obamodel:
             print(f"Market Price: ${self.market_price:.2f}/tonne")
         else:
             print("\nNo profitable abatement at current market price")
-            
+                
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """
         Apply abatement results to the facility's data.
