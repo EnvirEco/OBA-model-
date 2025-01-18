@@ -675,167 +675,287 @@ class obamodel:
         sample_size = min(5, len(self.abatement_cost_curve))
 
 # 4. Price Determination and Abatement
+
     def determine_market_price(self, supply: float, demand: float, year: int) -> float:
-        """Determine market price based on supply/demand balance."""
-        print(f"\nDetermining market price for year {year}")
-        print(f"Supply: {supply:.2f}, Demand: {demand:.2f}")
+        """Determine market price from marginal abatement cost curves and market balance."""
+        print(f"\n=== Market Price Determination for Year {year} ===")
+        print(f"Supply: {supply:.2f}")
+        print(f"Demand: {demand:.2f}")
+        print(f"Net Shortage: {(demand - supply):.2f}")
         
-        # Build MAC curve for all facilities with emissions
-        mac_curve = []
-        for _, facility in self.facilities_data.iterrows():
-            curve_data = self.abatement_cost_curve[
-                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ]
-            if not curve_data.empty:
-                curve = curve_data.iloc[0]
-                emissions = facility[f'Emissions_{year}']
-                if emissions > 0:
-                    for pct in range(10, 101, 10):  # Generate points at 10% intervals
-                        abatement = emissions * (pct/100)
-                        if abatement <= curve['Max Reduction (MTCO2e)']:
-                            mac = curve['Slope'] * abatement + curve['Intercept']
-                            if mac > 0:
-                                mac_curve.append(mac)
-        
-        mac_curve.sort()
-        
-        # Find clearing price
-        if demand > supply:
-            needed_abatement = demand - supply
-            print(f"Market short by {needed_abatement:.2f} - finding clearing price")
-            
-            # Start from floor price
-            clearing_price = self.floor_price
-            
-            # Find lowest price that incentivizes sufficient abatement
-            for price in mac_curve:
-                potential_abatement = sum(
-                    min(
-                        facility[f'Emissions_{year}'],
-                        max(0, (price - curve['Intercept']) / curve['Slope'])
-                    )
-                    for _, facility in self.facilities_data.iterrows()
-                    for _, curve in self.abatement_cost_curve[
+        # If market is balanced/long, start from floor but consider selling costs
+        if supply >= demand:
+            # Find minimum profitable selling price
+            min_sell_price = float('inf')
+            for _, facility in self.facilities_data.iterrows():
+                if facility[f'Allowance Surplus/Deficit_{year}'] > 0:
+                    curve = self.abatement_cost_curve[
                         self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                    ].iterrows()
-                    if curve['Slope'] > 0
-                )
-                
-                if potential_abatement >= needed_abatement:
-                    clearing_price = price
-                    break
-        else:
-            # Market is long - use floor price
-            clearing_price = self.floor_price
-            print(f"Market long by {supply - demand:.2f} - using floor price")
-        
-        # Bound by floor/ceiling
-        self.market_price = min(max(clearing_price, self.floor_price), self.ceiling_price)
-        
-        # Compare to schedule for stability assessment
-        scheduled_price = self.price_schedule.get(year, self.floor_price)
-        print(f"Market price: ${self.market_price:.2f}")
-        print(f"Schedule price: ${scheduled_price:.2f}")
-        
-        return self.market_price
-
-    def _build_mac_curve(self, year: int) -> List[float]:
-        """Build marginal abatement cost curve."""
-        mac_points = []
-        
-        # Get facilities with deficits
-        deficits = self.facilities_data[
-            self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0
-        ]
-        
-        for _, facility in deficits.iterrows():
-            # Get facility's abatement curve
-            curve = self.abatement_cost_curve[
-                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ].iloc[0]
+                    ]
+                    if not curve.empty:
+                        min_sell_price = min(min_sell_price, float(curve.iloc[0]['Intercept']))
             
-            # Calculate maximum abatement needed
-            deficit = abs(facility[f'Allowance Surplus/Deficit_{year}'])
-            max_reduction = min(curve['Max Reduction (MTCO2e)'], deficit)
-            
-            # Get curve parameters
-            slope = float(curve['Slope'])
-            intercept = float(curve['Intercept'])
-    
-            # Ensure intercept is reasonable
-            if intercept < 0:
-                print(f"Warning: Negative intercept ({intercept}) for Facility ID {facility['Facility ID']}. Adjusting to 0.")
-                intercept = 0
-            
-            # Build curve points
-            steps = 100  # Number of points to generate
-            for i in range(steps):
-                qty = max_reduction * (i + 1) / steps
-                mac = slope * qty + intercept
-                if mac > 0 and mac <= self.ceiling_price:
-                    mac_points.append(mac)
+            clearing_price = max(self.floor_price, min_sell_price / 2)
+            self.market_price = clearing_price
+            print(f"Market is long - price set to: ${clearing_price:.2f}")
+            return clearing_price
         
-        # Handle empty MAC curve case
-        if not mac_points:
-            print("Warning: Empty MAC curve. Using floor price.")
-            mac_points = [self.floor_price]
-        else:
-            # Sort points for proper price determination
-            mac_points.sort()
-            
-        print(f"MAC Curve: Min=${min(mac_points):.2f}, Max=${max(mac_points):.2f}, Points={len(mac_points)}")
+        # Market is short - find clearing price from MAC curves
+        needed_abatement = demand - supply
+        print(f"Market is short - need {needed_abatement:.2f} abatement")
         
-        return mac_points
-
-    def calculate_abatement(self, year: int) -> None:
-        """Calculate profitable abatement based on market price."""
-        print(f"\nCalculating abatement at price ${self.market_price:.2f}")
+        # Build array of possible clearing prices
+        clearing_prices = [self.floor_price]  # Start with floor
         
-        total_abatement = 0.0
-        for idx, facility in self.facilities_data.iterrows():
-            # Get facility's curve
-            curve_data = self.abatement_cost_curve[
-                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ]
-            
-            if curve_data.empty:
+        # Add MAC-based prices
+        for _, facility in self.facilities_data.iterrows():
+            # Skip if no emissions to abate
+            if facility[f'Emissions_{year}'] <= 0:
                 continue
                 
-            curve = curve_data.iloc[0]
+            curve = self.abatement_cost_curve[
+                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+            ]
+            if curve.empty:
+                continue
+                
+            curve = curve.iloc[0]
+            intercept = float(curve['Intercept'])
+            slope = float(curve['Slope'])
+            max_reduction = min(
+                float(curve['Max Reduction (MTCO2e)']),
+                facility[f'Emissions_{year}']
+            )
+            
+            # Add facility's MAC curve prices
+            if slope > 0:
+                # Price at start of abatement
+                if intercept > 0:
+                    clearing_prices.append(intercept)
+                
+                # Price at max abatement
+                max_price = intercept + (slope * max_reduction)
+                if max_price <= self.ceiling_price:
+                    clearing_prices.append(max_price)
+                
+                # Add intermediate points
+                for pct in [0.25, 0.5, 0.75]:
+                    price = intercept + (slope * max_reduction * pct)
+                    if price <= self.ceiling_price:
+                        clearing_prices.append(price)
+        
+        # Add ceiling price and some points below
+        clearing_prices.append(self.ceiling_price)
+        
+        # Sort and deduplicate
+        clearing_prices = sorted(set(clearing_prices))
+        print(f"\nTesting {len(clearing_prices)} price points...")
+        
+        # Find clearing price
+        best_price = self.ceiling_price
+        best_gap = float('inf')
+        
+        for price in clearing_prices:
+            potential_abatement = 0
+            abatement_costs = []
+            
+            # Calculate total abatement at this price
+            for _, facility in self.facilities_data.iterrows():
+                # Skip if no emissions
+                if facility[f'Emissions_{year}'] <= 0:
+                    continue
+                    
+                curve = self.abatement_cost_curve[
+                    self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+                ]
+                if curve.empty:
+                    continue
+                    
+                curve = curve.iloc[0]
+                slope = float(curve['Slope'])
+                intercept = float(curve['Intercept'])
+                max_reduction = min(
+                    float(curve['Max Reduction (MTCO2e)']),
+                    facility[f'Emissions_{year}']
+                )
+                
+                if slope > 0 and price > intercept:
+                    # Calculate economic abatement
+                    econ_abatement = min(
+                        max_reduction,
+                        (price - intercept) / slope
+                    )
+                    
+                    if econ_abatement > 0:
+                        # Calculate average cost
+                        total_cost = (slope * econ_abatement * econ_abatement / 2) + (intercept * econ_abatement)
+                        avg_cost = total_cost / econ_abatement
+                        
+                        # Only count if profitable
+                        if avg_cost < price:
+                            potential_abatement += econ_abatement
+                            abatement_costs.append(avg_cost)
+            
+            # Check how well this price balances the market
+            gap = abs(potential_abatement - needed_abatement)
+            print(f"Price ${price:.2f} -> Abatement: {potential_abatement:.2f} (gap: {gap:.2f})")
+            
+            if gap < best_gap:
+                best_gap = gap
+                best_price = price
+                
+            # Stop if we've found sufficient abatement
+            if potential_abatement >= needed_abatement:
+                break
+        
+        # Set final price
+        self.market_price = best_price
+        print(f"\nFinal Price Analysis:")
+        print(f"Clearing Price: ${best_price:.2f}")
+        print(f"Target Abatement: {needed_abatement:.2f}")
+        print(f"Price Gap: {best_gap:.2f}")
+        
+        return best_price
+    
+    def _build_mac_curve(self, year: int) -> List[float]:
+        """Build MAC curve with facility-specific characteristics."""
+        mac_points = []
+        
+        print("\nBuilding MAC Curve...")
+        for _, facility in self.facilities_data.iterrows():
+            # Skip if no emissions
+            if facility[f'Emissions_{year}'] <= 0:
+                continue
+                
+            curve = self.abatement_cost_curve[
+                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+            ]
+            if curve.empty:
+                continue
+                
+            curve = curve.iloc[0]
+            slope = float(curve['Slope'])
+            intercept = float(curve['Intercept'])
+            max_reduction = min(
+                float(curve['Max Reduction (MTCO2e)']),
+                facility[f'Emissions_{year}']
+            )
+            
+            if slope > 0:
+                # Generate more granular points
+                for pct in range(5, 101, 5):  # Every 5%
+                    abatement = max_reduction * (pct/100)
+                    mac = intercept + (slope * abatement)
+                    
+                    if mac > 0 and mac <= self.ceiling_price:
+                        mac_points.append(mac)
+                        
+                print(f"Facility {facility['Facility ID']}:")
+                print(f"  Slope: {slope:.4f}")
+                print(f"  Intercept: {intercept:.2f}")
+                print(f"  Max Reduction: {max_reduction:.2f}")
+        
+        mac_points.sort()
+        if mac_points:
+            print(f"\nMAC Points: {len(mac_points)}")
+            print(f"Range: ${min(mac_points):.2f} - ${max(mac_points):.2f}")
+        
+        return mac_points  
+
+    def calculate_abatement(self, year: int) -> None:
+        """Calculate profit-maximizing abatement for each facility."""
+        print(f"\n=== Abatement Analysis for Year {year} ===")
+        print(f"Market Price: ${self.market_price:.2f}")
+        
+        total_abatement = 0.0
+        total_cost = 0.0
+        
+        for idx, facility in self.facilities_data.iterrows():
+            print(f"\nAnalyzing Facility {facility['Facility ID']}")
+            
+            # Get facility's MAC curve
+            curve = self.abatement_cost_curve[
+                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+            ]
+            if curve.empty:
+                print("  No MAC curve found")
+                continue
+                
+            curve = curve.iloc[0]
+            emissions = facility[f'Emissions_{year}']
+            if emissions <= 0:
+                print("  No emissions to abate")
+                continue
+                
+            # Get MAC curve parameters
             slope = float(curve['Slope'])
             intercept = float(curve['Intercept'])
             max_reduction = float(curve['Max Reduction (MTCO2e)'])
             
-            # Calculate profitable abatement
-            if slope > 0 and self.market_price > intercept:
-                # Calculate quantity where MAC equals price
-                potential_abatement = (self.market_price - intercept) / slope
+            print(f"  MAC Parameters:")
+            print(f"  - Slope: {slope:.4f}")
+            print(f"  - Intercept: ${intercept:.2f}")
+            print(f"  - Max Reduction: {max_reduction:.2f}")
+            print(f"  - Current Emissions: {emissions:.2f}")
+            
+            if slope <= 0:
+                print("  Invalid MAC curve (slope <= 0)")
+                continue
                 
-                # Bound by maximum reduction and current emissions
-                current_emissions = facility[f'Emissions_{year}']
-                bounded_abatement = min(
-                    potential_abatement,
-                    max_reduction,
-                    current_emissions
-                )
+            # Calculate optimal abatement
+            # At any quantity q, marginal cost = intercept + slope*q
+            # Profit maximizing point is where marginal cost = market price
+            # So: market_price = intercept + slope*q
+            # Therefore q = (market_price - intercept)/slope
+            optimal_quantity = (self.market_price - intercept) / slope
+            
+            # Bound by constraints
+            bounded_quantity = min(
+                optimal_quantity,
+                max_reduction,
+                emissions
+            )
+            
+            if bounded_quantity <= 0:
+                print("  No profitable abatement")
+                continue
                 
-                if bounded_abatement > 0:
-                    # Calculate cost
-                    abatement_cost = (
-                        (slope * bounded_abatement * bounded_abatement / 2) +
-                        (intercept * bounded_abatement)
-                    )
-                    
-                    # Update facility data
-                    self.facilities_data.at[idx, f'Tonnes Abated_{year}'] = bounded_abatement
-                    self.facilities_data.at[idx, f'Abatement Cost_{year}'] = abatement_cost
-                    self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += bounded_abatement
-                    
-                    total_abatement += bounded_abatement
-                    print(f"Facility {facility['Facility ID']}: {bounded_abatement:.2f} tonnes at ${abatement_cost:.2f}")
-        
-        print(f"\nTotal abatement: {total_abatement:.2f} tonnes")
-
+            # Calculate total and average costs
+            total_abatement_cost = (
+                (slope * bounded_quantity * bounded_quantity / 2) + 
+                (intercept * bounded_quantity)
+            )
+            avg_cost = total_abatement_cost / bounded_quantity
+            
+            # Only abate if profitable vs. market price
+            if avg_cost < self.market_price:
+                print(f"  Profitable Abatement Found:")
+                print(f"  - Quantity: {bounded_quantity:.2f}")
+                print(f"  - Total Cost: ${total_abatement_cost:.2f}")
+                print(f"  - Average Cost: ${avg_cost:.2f}/unit")
+                print(f"  - Market Price: ${self.market_price:.2f}/unit")
+                print(f"  - Profit/unit: ${(self.market_price - avg_cost):.2f}")
+                
+                # Execute abatement
+                self.facilities_data.at[idx, f'Tonnes Abated_{year}'] = bounded_quantity
+                self.facilities_data.at[idx, f'Abatement Cost_{year}'] = total_abatement_cost
+                self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += bounded_quantity
+                
+                total_abatement += bounded_quantity
+                total_cost += total_abatement_cost
+            else:
+                print("  Abatement not profitable vs. market price")
+                
+        # Print summary
+        if total_abatement > 0:
+            print(f"\nMarket Summary:")
+            print(f"Total Abatement: {total_abatement:.2f} tonnes")
+            print(f"Total Cost: ${total_cost:.2f}")
+            print(f"Average Cost: ${(total_cost/total_abatement):.2f}/tonne")
+            print(f"Market Price: ${self.market_price:.2f}/tonne")
+        else:
+            print("\nNo profitable abatement at current market price")   
+            
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """
         Apply abatement results to the facility's data.
@@ -857,134 +977,149 @@ class obamodel:
 
 # 5. Trading Execution
     def trade_allowances(self, year: int) -> None:
-        """Execute trades at market clearing price with improved balance handling."""
-        print(f"\n=== Trading Analysis for Year {year} ===")
+        """Execute trades with detailed cost tracking."""
+        print(f"\n=== TRADE EXECUTION DEBUG - Year {year} ===")
+        print(f"Current Market Price: ${self.market_price:.2f}")
         
-        # Initialize trading metrics
-        self.facilities_data[f'Trade Volume_{year}'] = 0.0
-        self.facilities_data[f'Allowance Purchase Cost_{year}'] = 0.0
-        self.facilities_data[f'Allowance Sales Revenue_{year}'] = 0.0
-        
-        # Calculate initial market balance
-        total_supply, total_demand = self.calculate_market_positions(year)
-        print(f"\nInitial market positions:")
-        print(f"Total Supply: {total_supply:.4f}")
-        print(f"Total Demand: {total_demand:.4f}")
-        
-        # Set minimum trade threshold
-        MIN_TRADE_VOLUME = 0.0001
-        
-        # Only proceed if there's meaningful imbalance
-        if abs(total_demand - total_supply) < MIN_TRADE_VOLUME:
-            print("Market is balanced within tolerance - no trading needed")
-            return
-        
-        trading_rounds = 0
-        max_rounds = 10  # Prevent infinite loops
-        total_volume_traded = 0
-        
-        while trading_rounds < max_rounds:
-            # Get current buyers and sellers
-            buyers = self.facilities_data[
-                self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < -MIN_TRADE_VOLUME
-            ].copy()
-            
-            sellers = self.facilities_data[
-                self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > MIN_TRADE_VOLUME
-            ].copy()
-            
-            if buyers.empty or sellers.empty:
-                print(f"No more valid trading pairs after {trading_rounds} rounds")
-                break
+        # 1. Setup tracking
+        class TradeTracker:
+            def __init__(self):
+                self.total_volume = 0.0
+                self.total_cost = 0.0
+                self.trades = []
                 
-            # Sort buyers by willingness to pay (higher profit rate first)
-            buyers['trade_priority'] = buyers['Baseline Profit Rate'] / buyers[f'Allowance Surplus/Deficit_{year}'].abs()
-            buyers = buyers.sort_values('trade_priority', ascending=False)
+            def add_trade(self, buyer_id, seller_id, volume, price):
+                cost = volume * price
+                self.trades.append({
+                    'buyer': buyer_id,
+                    'seller': seller_id,
+                    'volume': volume,
+                    'price': price,
+                    'cost': cost
+                })
+                self.total_volume += volume
+                self.total_cost += cost
+                
+            def print_summary(self):
+                print("\nDetailed Trade Log:")
+                for t in self.trades:
+                    print(f"Trade: {t['volume']:.2f} units @ ${t['price']:.2f} = ${t['cost']:.2f}")
+                    print(f"  Buyer: {t['buyer']}, Seller: {t['seller']}")
+                print(f"\nTotal Volume: {self.total_volume:.2f}")
+                print(f"Total Cost: ${self.total_cost:.2f}")
+                print(f"Average Price: ${(self.total_cost/self.total_volume if self.total_volume > 0 else 0):.2f}")
+        
+        tracker = TradeTracker()
+        
+        # 2. Initialize columns if needed
+        trade_columns = [
+            f'Trade Volume_{year}',
+            f'Allowance Purchase Cost_{year}',
+            f'Allowance Sales Revenue_{year}',
+            f'Trade Cost_{year}'
+        ]
+        for col in trade_columns:
+            if col not in self.facilities_data.columns:
+                print(f"Creating column: {col}")
+                self.facilities_data[col] = 0.0
+            else:
+                print(f"Resetting column: {col}")
+                self.facilities_data[col] = 0.0
+                
+        # 3. Get market positions
+        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        print("\nInitial Positions:")
+        print(f"Total Short: {abs(positions[positions < 0].sum()):.2f}")
+        print(f"Total Long: {positions[positions > 0].sum():.2f}")
+        
+        # 4. Execute trades
+        MIN_TRADE = 0.0001
+        buyers = self.facilities_data[positions < -MIN_TRADE].copy()
+        sellers = self.facilities_data[positions > MIN_TRADE].copy()
+        
+        for _, buyer in buyers.iterrows():
+            demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
+            remaining_demand = demand
             
-            # Sort sellers by cost (lower MAC first)
-            sellers['mac'] = sellers.apply(
-                lambda row: self._get_facility_mac(row['Facility ID'], year),
-                axis=1
-            )
-            sellers = sellers.sort_values('mac')
-            
-            round_volume = 0
-            trades_this_round = []
-            
-            # Execute trades for this round
-            for _, buyer in buyers.iterrows():
-                buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
-                if buyer_demand < MIN_TRADE_VOLUME:
+            for seller_idx, seller in sellers.iterrows():
+                supply = seller[f'Allowance Surplus/Deficit_{year}']
+                if supply <= MIN_TRADE:
                     continue
                     
-                for seller_idx, seller in sellers.iterrows():
-                    seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
-                    if seller_supply < MIN_TRADE_VOLUME:
-                        continue
+                # Calculate trade
+                volume = min(remaining_demand, supply)
+                if volume < MIN_TRADE:
+                    continue
                     
-                    # Calculate optimal trade volume
-                    trade_volume = min(buyer_demand, seller_supply)
-                    if trade_volume < MIN_TRADE_VOLUME:
-                        continue
-                    
-                    # Calculate trade cost using current market price
-                    trade_cost = trade_volume * self.market_price
-                    
-                    # Execute trade
-                    # Update buyer
-                    self.facilities_data.loc[buyer.name, f'Allowance Surplus/Deficit_{year}'] += trade_volume
-                    self.facilities_data.loc[buyer.name, f'Trade Volume_{year}'] += trade_volume
-                    self.facilities_data.loc[buyer.name, f'Allowance Purchase Cost_{year}'] += trade_cost
-                    
-                    # Update seller
-                    self.facilities_data.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
-                    self.facilities_data.loc[seller_idx, f'Trade Volume_{year}'] += trade_volume
-                    self.facilities_data.loc[seller_idx, f'Allowance Sales Revenue_{year}'] += trade_cost
-                    
-                    # Record trade
-                    trades_this_round.append({
-                        'Buyer': buyer['Facility ID'],
-                        'Seller': seller['Facility ID'],
-                        'Volume': trade_volume,
-                        'Price': self.market_price,
-                        'Cost': trade_cost
-                    })
-                    
-                    round_volume += trade_volume
-                    total_volume_traded += trade_volume
-                    
-                    # Update remaining needs
-                    buyer_demand -= trade_volume
-                    sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
-                    
-                    if buyer_demand < MIN_TRADE_VOLUME:
-                        break
-                        
-            # Check if meaningful trading occurred this round
-            if round_volume < MIN_TRADE_VOLUME:
-                print(f"No significant trades in round {trading_rounds + 1}")
-                break
+                # Execute trade and track
+                cost = volume * self.market_price
+                print(f"\nExecuting Trade:")
+                print(f"Volume: {volume:.4f}")
+                print(f"Price: ${self.market_price:.2f}")
+                print(f"Cost: ${cost:.2f}")
                 
-            print(f"\nRound {trading_rounds + 1} Summary:")
-            print(f"Volume traded: {round_volume:.4f}")
-            print(f"Trades executed: {len(trades_this_round)}")
-            
-            # Recalculate market balance
-            new_supply, new_demand = self.calculate_market_positions(year)
-            print(f"Updated market balance - Supply: {new_supply:.4f}, Demand: {new_demand:.4f}")
-            
-            trading_rounds += 1
+                # Update buyer
+                print("\nUpdating Buyer:")
+                print(f"Before - Volume: {self.facilities_data.at[buyer.name, f'Trade Volume_{year}']:.4f}")
+                print(f"Before - Cost: {self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}']:.2f}")
+                
+                self.facilities_data.at[buyer.name, f'Allowance Surplus/Deficit_{year}'] += volume
+                self.facilities_data.at[buyer.name, f'Trade Volume_{year}'] += volume
+                self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}'] += cost
+                self.facilities_data.at[buyer.name, f'Trade Cost_{year}'] += cost
+                
+                print(f"After - Volume: {self.facilities_data.at[buyer.name, f'Trade Volume_{year}']:.4f}")
+                print(f"After - Cost: {self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}']:.2f}")
+                
+                # Update seller
+                print("\nUpdating Seller:")
+                print(f"Before - Volume: {self.facilities_data.at[seller_idx, f'Trade Volume_{year}']:.4f}")
+                print(f"Before - Revenue: {self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}']:.2f}")
+                
+                self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
+                self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
+                self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
+                
+                print(f"After - Volume: {self.facilities_data.at[seller_idx, f'Trade Volume_{year}']:.4f}")
+                print(f"After - Revenue: {self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}']:.2f}")
+                
+                # Track trade
+                tracker.add_trade(buyer['Facility ID'], seller['Facility ID'], volume, self.market_price)
+                
+                # Update remaining demand
+                remaining_demand -= volume
+                if remaining_demand <= MIN_TRADE:
+                    break
+                    
+                # Update seller's remaining supply
+                sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
+                if sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] <= MIN_TRADE:
+                    continue
         
-        # Final summary
-        print(f"\nFinal Trading Summary:")
-        print(f"Total rounds: {trading_rounds}")
-        print(f"Total volume traded: {total_volume_traded:.4f}")
+        # 5. Print final verification
+        tracker.print_summary()
         
-        final_supply, final_demand = self.calculate_market_positions(year)
-        print(f"Final market balance:")
-        print(f"Supply: {final_supply:.4f}")
-        print(f"Demand: {final_demand:.4f}")
-        print(f"Imbalance: {abs(final_supply - final_demand):.4f}")
+        # Verify trade costs in data
+        total_purchase_costs = self.facilities_data[f'Allowance Purchase Cost_{year}'].sum()
+        total_sales_revenue = self.facilities_data[f'Allowance Sales Revenue_{year}'].sum()
+        total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum() / 2  # Divide by 2 as both sides count
+        
+        print("\nFinal Data Verification:")
+        print(f"Total Purchase Costs: ${total_purchase_costs:.2f}")
+        print(f"Total Sales Revenue: ${total_sales_revenue:.2f}")
+        print(f"Total Trade Volume: {total_trade_volume:.2f}")
+        if total_trade_volume > 0:
+            print(f"Implied Average Price: ${total_purchase_costs/total_trade_volume:.2f}")
+        
+        # 6. Check final positions
+        final_positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        final_short = abs(final_positions[final_positions < 0].sum())
+        final_long = final_positions[final_positions > 0].sum()
+        
+        print("\nFinal Positions:")
+        print(f"Final Short: {final_short:.2f}")
+        print(f"Final Long: {final_long:.2f}")
+        print(f"Final Net: {(final_long - final_short):.2f}")
 
     def debug_trade_conditions(self, year: int) -> None:
         """Debug why trades are not occurring by checking key conditions."""
