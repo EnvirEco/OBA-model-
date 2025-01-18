@@ -862,7 +862,7 @@ class obamodel:
         
         return mac_points  
 
-    def calculate_abatement(self, year: int) -> None:
+     def calculate_abatement(self, year: int) -> None:
         """Calculate profit-maximizing abatement for each facility."""
         print(f"\n=== Abatement Analysis for Year {year} ===")
         print(f"Market Price: ${self.market_price:.2f}")
@@ -903,10 +903,6 @@ class obamodel:
                 continue
                 
             # Calculate optimal abatement
-            # At any quantity q, marginal cost = intercept + slope*q
-            # Profit maximizing point is where marginal cost = market price
-            # So: market_price = intercept + slope*q
-            # Therefore q = (market_price - intercept)/slope
             optimal_quantity = (self.market_price - intercept) / slope
             
             # Bound by constraints
@@ -941,6 +937,9 @@ class obamodel:
                 self.facilities_data.at[idx, f'Abatement Cost_{year}'] = total_abatement_cost
                 self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += bounded_quantity
                 
+                # Update emissions to reflect abatement
+                self.facilities_data.at[idx, f'Emissions_{year}'] -= bounded_quantity
+                
                 total_abatement += bounded_quantity
                 total_cost += total_abatement_cost
             else:
@@ -954,7 +953,7 @@ class obamodel:
             print(f"Average Cost: ${(total_cost/total_abatement):.2f}/tonne")
             print(f"Market Price: ${self.market_price:.2f}/tonne")
         else:
-            print("\nNo profitable abatement at current market price")   
+            print("\nNo profitable abatement at current market price")
             
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """
