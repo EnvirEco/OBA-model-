@@ -385,7 +385,7 @@ class obamodel:
   
 # 3. Core Model Execution Methods
     def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Execute model with proper sequencing."""
+        """Execute model with proper sequencing and return value handling."""
         print("\nExecuting emission trading model...")
         market_summary = []
         sector_summaries = []
@@ -399,24 +399,21 @@ class obamodel:
                 # 2. Initial market positions
                 supply, demand = self.calculate_market_positions(year)
                 
-                # 3. Determine market price
+                # 3. Determine initial market price
                 self.market_price = self.determine_market_price(supply, demand, year)
                 print(f"Market price set to: ${self.market_price:.2f}")
                 
                 # 4. Calculate abatement based on this price
                 self.calculate_abatement(year)
                 
-               # 5. Recalculate market positions and price after abatement
-                final_supply, final_demand = self.calculate_market_positions(year)
-                self.market_price = self.determine_market_price(final_supply, final_demand, year)
-                
-                # 6. Execute trades with final price
+                # 5. Execute trades with proper return handling
+                trade_volume, trade_cost = 0.0, 0.0
                 if self.validate_market_price():
-                    self.trade_allowances(year)
-            
-                # 5. Final market clearing and trading
-                final_supply, final_demand = self.calculate_market_positions(year)
-                self.trade_allowances(year)
+                    trade_volume, trade_cost = self.trade_allowances(year)
+                    
+                print(f"\nTrading Results:")
+                print(f"Total Volume: {trade_volume:.2f}")
+                print(f"Total Cost: ${trade_cost:.2f}")
                 
                 # 6. Calculate costs
                 self.calculate_costs(year)
@@ -428,18 +425,22 @@ class obamodel:
             except Exception as e:
                 print(f"Error in year {year}: {str(e)}")
                 raise
-        
-        # Fix: Pass the arguments explicitly
-        facility_results = self._prepare_facility_results(
-            start_year=self.start_year, 
-            end_year=self.end_year
-        )
-        
-        # Convert to DataFrames
-        market_summary_df = pd.DataFrame(market_summary)
-        sector_summary_df = pd.concat(sector_summaries, ignore_index=True)
-        
-        return market_summary_df, sector_summary_df, facility_results
+                
+        # Convert to DataFrames with error handling
+        try:
+            market_summary_df = pd.DataFrame(market_summary)
+            sector_summary_df = pd.concat(sector_summaries, ignore_index=True) if sector_summaries else pd.DataFrame()
+            facility_results = self._prepare_facility_results(
+                start_year=self.start_year, 
+                end_year=self.end_year
+            )
+            
+            return market_summary_df, sector_summary_df, facility_results
+            
+        except Exception as e:
+            print(f"Error creating summary DataFrames: {str(e)}")
+            # Return empty DataFrames rather than None
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
        
     
     def validate_scenario_parameters(self, scenario_type: str, params: Dict) -> bool:
@@ -901,7 +902,6 @@ class obamodel:
         print(f"Supply: {supply:.2f}")
         print(f"Demand: {demand:.2f}")
     
-        # If market is long (supply > demand), find minimum profitable selling price
         if supply >= demand:
             min_sell_price = float('inf')
             for _, facility in self.facilities_data.iterrows():
@@ -912,20 +912,16 @@ class obamodel:
                     if not curve.empty:
                         min_sell_price = min(min_sell_price, float(curve.iloc[0]['Intercept']))
     
-            # Set price to minimum profitable level but no lower than floor
             self.market_price = max(self.floor_price, min_sell_price)
             print(f"Market is long - price set to: ${self.market_price:.2f}")
             return self.market_price
     
-        # Market is short - determine price from MAC curves
         needed_abatement = demand - supply
         print(f"Market is short - need {needed_abatement:.2f} abatement")
     
-        # Get all potential clearing prices from MAC curves
         clearing_prices = []
         total_potential_abatement = 0
     
-        # Build array of MAC-based prices
         for _, facility in self.facilities_data.iterrows():
             curve = self.abatement_cost_curve[
                 self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
@@ -939,36 +935,28 @@ class obamodel:
             max_reduction = float(curve['Max Reduction (MTCO2e)'])
     
             if slope > 0:
-                # Add key prices from MAC curve
-                clearing_prices.append(intercept)  # Start of abatement
+                clearing_prices.append(intercept)
                 max_price = intercept + (slope * max_reduction)
-                clearing_prices.append(min(max_price, self.ceiling_price))  # Max abatement price
+                clearing_prices.append(min(max_price, self.ceiling_price))
     
-                # Add intermediate points for better resolution
                 for pct in [0.25, 0.5, 0.75]:
                     price = intercept + (slope * max_reduction * pct)
                     if price < self.ceiling_price:
                         clearing_prices.append(price)
     
-                # Track total potential abatement
                 total_potential_abatement += max_reduction
     
-        # Add price ceiling
         clearing_prices.append(self.ceiling_price)
-    
-        # Sort and deduplicate prices
         clearing_prices = sorted(set(clearing_prices))
         print(f"\nTesting {len(clearing_prices)} price points...")
         print(f"Total potential abatement: {total_potential_abatement:.2f}")
     
-        # Find market clearing price
         best_price = self.ceiling_price
         min_excess_demand = float('inf')
     
         for price in clearing_prices:
             potential_abatement = 0
     
-            # Calculate total abatement at this price
             for _, facility in self.facilities_data.iterrows():
                 curve = self.abatement_cost_curve[
                     self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
@@ -982,27 +970,22 @@ class obamodel:
                 max_reduction = float(curve['Max Reduction (MTCO2e)'])
     
                 if slope > 0 and price > intercept:
-                    # Calculate economic abatement
                     econ_abatement = min(
                         max_reduction,
                         (price - intercept) / slope
                     )
                     potential_abatement += econ_abatement
     
-            # Calculate excess demand at this price
             excess_demand = needed_abatement - potential_abatement
             print(f"Price ${price:.2f} -> Abatement: {potential_abatement:.2f}, Excess demand: {excess_demand:.2f}")
     
-            # Update best price if this reduces excess demand
             if abs(excess_demand) < min_excess_demand:
                 min_excess_demand = abs(excess_demand)
                 best_price = price
     
-                # If we've found sufficient abatement, we can stop
                 if excess_demand <= 0:
                     break
     
-        # Set final price (capped at ceiling)
         self.market_price = min(best_price, self.ceiling_price)
         print(f"\nFinal Market Determination:")
         print(f"Clearing Price: ${self.market_price:.2f}")
@@ -1010,7 +993,7 @@ class obamodel:
         print(f"Best Excess Demand: {min_excess_demand:.2f}")
     
         return self.market_price
-
+    
     def validate_market_price(self) -> bool:
         if not isinstance(self.market_price, (int, float)):
             print(f"ERROR: Invalid market price type: {type(self.market_price)}")
@@ -1069,16 +1052,25 @@ class obamodel:
         return mac_points  
 
     def calculate_abatement(self, year: int) -> None:
-        """Calculate economically rational abatement based on market price."""
         print(f"\n=== Calculating Abatement for Year {year} ===")
         print(f"Market Price: ${self.market_price:.2f}")
         
         total_abatement = 0.0
         total_cost = 0.0
         
+        # First pass: Calculate market balance
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        market_shortage = max(0, total_emissions - total_allocations)
+        
+        # Calculate per-facility share of needed market balance
+        n_facilities = len(self.facilities_data)
+        balance_share = market_shortage / n_facilities if n_facilities > 0 else 0
+        
         for idx, facility in self.facilities_data.iterrows():
-            # Get facility's current emissions before abatement
-            current_emissions = facility[f'Emissions_{year}']  # Fixed: use correct reference
+            current_emissions = facility[f'Emissions_{year}']
+            allocation = facility[f'Allocations_{year}']
+            initial_gap = current_emissions - allocation
             
             curve = self.abatement_cost_curve[
                 self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
@@ -1091,43 +1083,54 @@ class obamodel:
             intercept = float(curve['Intercept'])
             max_reduction = float(curve['Max Reduction (MTCO2e)'])
             
-            if slope > 0 and self.market_price > intercept:
-                # Calculate economic abatement
+            if self.market_price > intercept and slope > 0:
+                # Base economic abatement
                 economic_quantity = (self.market_price - intercept) / slope
                 
-                # Bound by constraints
-                bounded_quantity = min(
-                    economic_quantity,
+                # Additional abatement if profitable to trade
+                trading_potential = 0
+                if initial_gap < 0:  # Already long
+                    # Consider additional abatement for trading
+                    if self.market_price > (intercept + slope * economic_quantity):
+                        trading_potential = min(
+                            max_reduction - economic_quantity,
+                            -initial_gap * 0.5  # Use up to 50% of surplus for additional abatement
+                        )
+                
+                # Calculate target abatement including trading consideration
+                target_abatement = min(
+                    economic_quantity + trading_potential,
                     max_reduction,
-                    current_emissions  # Use correct emissions reference
+                    current_emissions,
+                    # Ensure some facilities generate surplus for trading
+                    current_emissions + max(-initial_gap, balance_share * 1.2)  # Allow 20% extra
                 )
                 
-                if bounded_quantity > 0:
-                    # Calculate total cost
-                    total_abatement_cost = (
-                        (slope * bounded_quantity * bounded_quantity / 2) + 
-                        (intercept * bounded_quantity)
+                if target_abatement > 0:
+                    abatement_cost = (
+                        (slope * target_abatement * target_abatement / 2) +
+                        (intercept * target_abatement)
                     )
                     
                     # Update facility data
-                    self.facilities_data.at[idx, f'Tonnes Abated_{year}'] = bounded_quantity
-                    self.facilities_data.at[idx, f'Abatement Cost_{year}'] = total_abatement_cost
-                    self.facilities_data.at[idx, f'Emissions_{year}'] -= bounded_quantity
+                    self.facilities_data.at[idx, f'Tonnes Abated_{year}'] = target_abatement
+                    self.facilities_data.at[idx, f'Abatement Cost_{year}'] = abatement_cost
+                    self.facilities_data.at[idx, f'Emissions_{year}'] -= target_abatement
                     
-                    print(f"\nFacility {facility['Facility ID']}:")
-                    print(f"  Initial Emissions: {current_emissions:.2f}")
-                    print(f"  Abatement: {bounded_quantity:.2f}")
-                    print(f"  Final Emissions: {self.facilities_data.at[idx, f'Emissions_{year}']:.2f}")
-                    print(f"  Cost: ${total_abatement_cost:.2f}")
-                    
-                    total_abatement += bounded_quantity
-                    total_cost += total_abatement_cost
+                    total_abatement += target_abatement
+                    total_cost += abatement_cost
         
-        print(f"\nTotal Abatement Summary:")
+        # Verify post-abatement positions
+        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        total_short = abs(positions[positions < 0].sum())
+        total_long = positions[positions > 0].sum()
+        
+        print("\n=== Abatement Summary ===")
         print(f"Total Abatement: {total_abatement:.2f}")
-        print(f"Total Cost: ${total_cost:.2f}")
-        if total_abatement > 0:
-            print(f"Average Cost: ${(total_cost/total_abatement):.2f}") 
+        print(f"Average Cost per Tonne: ${(total_cost/total_abatement if total_abatement > 0 else 0):.2f}")
+        print(f"\nPost-Abatement Positions:")
+        print(f"Total Short: {total_short:.2f}")
+        print(f"Total Long: {total_long:.2f}") 
             
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """
@@ -1149,20 +1152,21 @@ class obamodel:
         print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
 
 # 5. Trading Execution
-    def trade_allowances(self, year: int) -> None:
-        print(f"\n=== TRADE EXECUTION DEBUG - Year {year} ===")
-    
-        if not self.validate_market_price():
-            print("ERROR: Invalid market price, cannot execute trades")
-            return
-            
-        print(f"Validated Market Price: ${self.market_price:.2f}")
-        
-        """Execute trades with detailed cost tracking."""
+    def trade_allowances(self, year: int) -> Tuple[float, float]:
+        """
+        Execute trades and return trading metrics.
+        Returns:
+            Tuple of (total_volume, total_cost)
+        """
         print(f"\n=== TRADE EXECUTION DEBUG - Year {year} ===")
         print(f"Current Market Price: ${self.market_price:.2f}")
     
-        # 1. Setup tracking
+        if not self.validate_market_price():
+            print("ERROR: Invalid market price, cannot execute trades")
+            return 0.0, 0.0
+        
+        print(f"Validated Market Price: ${self.market_price:.2f}")
+    
         class TradeTracker:
             def __init__(self):
                 self.total_volume = 0.0
@@ -1181,18 +1185,12 @@ class obamodel:
                 self.total_volume += volume
                 self.total_cost += cost
     
-            def print_summary(self):
-                print("\nDetailed Trade Log:")
-                for t in self.trades:
-                    print(f"Trade: {t['volume']:.2f} units @ ${t['price']:.2f} = ${t['cost']:.2f}")
-                    print(f"  Buyer: {t['buyer']}, Seller: {t['seller']}")
-                print(f"\nTotal Volume: {self.total_volume:.2f}")
-                print(f"Total Cost: ${self.total_cost:.2f}")
-                print(f"Average Price: ${(self.total_cost/self.total_volume if self.total_volume > 0 else 0):.2f}")
+            def get_metrics(self) -> Tuple[float, float]:
+                return self.total_volume, self.total_cost
     
         tracker = TradeTracker()
     
-        # 2. Initialize columns if needed
+        # Initialize trading columns if needed
         trade_columns = [
             f'Trade Volume_{year}',
             f'Allowance Purchase Cost_{year}',
@@ -1200,24 +1198,67 @@ class obamodel:
             f'Trade Cost_{year}'
         ]
         for col in trade_columns:
-            if col not in self.facilities_data.columns:
-                print(f"Creating column: {col}")
-                self.facilities_data[col] = 0.0
-            else:
-                print(f"Resetting column: {col}")
-                self.facilities_data[col] = 0.0
+            self.facilities_data[col] = 0.0
     
-        # 3. Get market positions
+        # Get market positions
         positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
         print("\nInitial Positions:")
         print(f"Total Short: {abs(positions[positions < 0].sum()):.2f}")
         print(f"Total Long: {positions[positions > 0].sum():.2f}")
     
-        # 4. Execute trades
-        MIN_TRADE = 0.0001
-        buyers = self.facilities_data[positions < -MIN_TRADE].copy()
-        sellers = self.facilities_data[positions > MIN_TRADE].copy()
+        # Identify potential traders based on MAC curves and market price
+        def is_potential_seller(facility):
+            position = facility[f'Allowance Surplus/Deficit_{year}']
+            if position <= 0:
+                return False
+                
+            curve = self.abatement_cost_curve[
+                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+            ].iloc[0]
+            
+            mac = float(curve['Intercept'])
+            current_abatement = facility[f'Tonnes Abated_{year}']
+            if current_abatement > 0:
+                mac += float(curve['Slope']) * current_abatement
+                
+            return self.market_price > mac
     
+        def is_potential_buyer(facility):
+            position = facility[f'Allowance Surplus/Deficit_{year}']
+            if position >= 0:
+                return False
+                
+            curve = self.abatement_cost_curve[
+                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
+            ].iloc[0]
+            
+            mac = float(curve['Intercept'])
+            current_abatement = facility[f'Tonnes Abated_{year}']
+            if current_abatement > 0:
+                mac += float(curve['Slope']) * current_abatement
+                
+            return self.market_price < mac
+    
+        # Identify traders
+        sellers = self.facilities_data[
+            self.facilities_data.apply(is_potential_seller, axis=1)
+        ].copy()
+        
+        buyers = self.facilities_data[
+            self.facilities_data.apply(is_potential_buyer, axis=1)
+        ].copy()
+    
+        print("\nTrader Analysis:")
+        print(f"Potential Sellers: {len(sellers)} (based on MAC)")
+        print(f"Potential Buyers: {len(buyers)} (based on MAC)")
+    
+        if buyers.empty or sellers.empty:
+            print("No valid trading pairs found.")
+            return 0.0, 0.0
+    
+        MIN_TRADE = 0.0001
+    
+        # Execute trades
         for _, buyer in buyers.iterrows():
             demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
             remaining_demand = demand
@@ -1227,12 +1268,10 @@ class obamodel:
                 if supply <= MIN_TRADE:
                     continue
     
-                # Calculate trade
                 volume = min(remaining_demand, supply)
                 if volume < MIN_TRADE:
                     continue
     
-                # Execute trade and track
                 cost = volume * self.market_price
                 print(f"\nExecuting Trade:")
                 print(f"Volume: {volume:.4f}")
@@ -1240,62 +1279,30 @@ class obamodel:
                 print(f"Cost: ${cost:.2f}")
     
                 # Update buyer
-                print("\nUpdating Buyer:")
-                print(f"Before - Volume: {self.facilities_data.at[buyer.name, f'Trade Volume_{year}']:.4f}")
-                print(f"Before - Cost: {self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}']:.2f}")
-    
                 self.facilities_data.at[buyer.name, f'Allowance Surplus/Deficit_{year}'] += volume
                 self.facilities_data.at[buyer.name, f'Trade Volume_{year}'] += volume
                 self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}'] += cost
                 self.facilities_data.at[buyer.name, f'Trade Cost_{year}'] += cost
     
-                print(f"After - Volume: {self.facilities_data.at[buyer.name, f'Trade Volume_{year}']:.4f}")
-                print(f"After - Cost: {self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}']:.2f}")
-    
                 # Update seller
-                print("\nUpdating Seller:")
-                print(f"Before - Volume: {self.facilities_data.at[seller_idx, f'Trade Volume_{year}']:.4f}")
-                print(f"Before - Revenue: {self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}']:.2f}")
-    
                 self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
                 self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
                 self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
     
-                print(f"After - Volume: {self.facilities_data.at[seller_idx, f'Trade Volume_{year}']:.4f}")
-                print(f"After - Revenue: {self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}']:.2f}")
-    
-                # Track trade
                 tracker.add_trade(buyer['Facility ID'], seller['Facility ID'], volume, self.market_price)
     
-                # After all trades complete, verify final positions
-                self.update_surplus_deficit(year)
-    
-                # Update remaining demand
                 remaining_demand -= volume
                 if remaining_demand <= MIN_TRADE:
                     break
     
-                # Update seller's remaining supply
                 sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
                 if sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] <= MIN_TRADE:
                     continue
     
-        # 5. Print final verification
-        tracker.print_summary()
+        # Calculate final metrics
+        total_volume, total_cost = tracker.get_metrics()
     
-        # Verify trade costs in data
-        total_purchase_costs = self.facilities_data[f'Allowance Purchase Cost_{year}'].sum()
-        total_sales_revenue = self.facilities_data[f'Allowance Sales Revenue_{year}'].sum()
-        total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum() / 2  # Divide by 2 as both sides count
-    
-        print("\nFinal Data Verification:")
-        print(f"Total Purchase Costs: ${total_purchase_costs:.2f}")
-        print(f"Total Sales Revenue: ${total_sales_revenue:.2f}")
-        print(f"Total Trade Volume: {total_trade_volume:.2f}")
-        if total_trade_volume > 0:
-            print(f"Implied Average Price: ${total_purchase_costs/total_trade_volume:.2f}")
-    
-        # 6. Check final positions
+        # Verify final positions
         final_positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
         final_short = abs(final_positions[final_positions < 0].sum())
         final_long = final_positions[final_positions > 0].sum()
@@ -1304,41 +1311,9 @@ class obamodel:
         print(f"Final Short: {final_short:.2f}")
         print(f"Final Long: {final_long:.2f}")
         print(f"Final Net: {(final_long - final_short):.2f}")
-
-    def debug_trade_conditions(self, year: int) -> None:
-        """Debug why trades are not occurring by checking key conditions."""
-        print(f"\n=== Trade Debug Analysis for Year {year} ===")
-        
-        # Check market positions
-        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
-        buyers = self.facilities_data[positions < 0]
-        sellers = self.facilities_data[positions > 0]
-        
-        print("\nMarket Position Analysis:")
-        print(f"Total facilities: {len(self.facilities_data)}")
-        print(f"Number of buyers: {len(buyers)}")
-        print(f"Number of sellers: {len(sellers)}")
-        print(f"Total demand: {abs(positions[positions < 0].sum()):.2f}")
-        print(f"Total supply: {positions[positions > 0].sum():.2f}")
-        
-        if len(buyers) == 0 or len(sellers) == 0:
-            print("ERROR: Missing buyers or sellers!")
-            return
-            
-        # Check price analysis
-        print("\nPrice Analysis:")
-        print(f"Current market price: ${self.market_price:.2f}")
-        
-        # Sample MAC curves and analyze trade potential
-        sample_size = min(5, len(self.abatement_cost_curve))
-        print(f"\nSample of {sample_size} MAC curves:")
-        sample_curves = self.abatement_cost_curve.head(sample_size)
-        for _, curve in sample_curves.iterrows():
-            print(f"Facility {curve['Facility ID']}:")
-            print(f"  Intercept: ${curve['Intercept']:.2f}")
-            print(f"  Slope: {curve['Slope']:.4f}")        
-      
-
+    
+        return total_volume, total_cost
+    
     def _get_facility_mac(self, facility_id: str, year: int) -> float:
         """Calculate facility's marginal abatement cost at current position."""
         try:
