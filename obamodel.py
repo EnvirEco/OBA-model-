@@ -1158,39 +1158,14 @@ class obamodel:
         Returns:
             Tuple of (total_volume, total_cost)
         """
-        print(f"\n=== TRADE EXECUTION DEBUG - Year {year} ===")
-        print(f"Current Market Price: ${self.market_price:.2f}")
+        print(f"\n=== TRADE EXECUTION - Year {year} ===")
+        print(f"Market Price: ${self.market_price:.2f}")
     
         if not self.validate_market_price():
             print("ERROR: Invalid market price, cannot execute trades")
             return 0.0, 0.0
-        
-        print(f"Validated Market Price: ${self.market_price:.2f}")
     
-        class TradeTracker:
-            def __init__(self):
-                self.total_volume = 0.0
-                self.total_cost = 0.0
-                self.trades = []
-    
-            def add_trade(self, buyer_id, seller_id, volume, price):
-                cost = volume * price
-                self.trades.append({
-                    'buyer': buyer_id,
-                    'seller': seller_id,
-                    'volume': volume,
-                    'price': price,
-                    'cost': cost
-                })
-                self.total_volume += volume
-                self.total_cost += cost
-    
-            def get_metrics(self) -> Tuple[float, float]:
-                return self.total_volume, self.total_cost
-    
-        tracker = TradeTracker()
-    
-        # Initialize trading columns if needed
+        # Initialize trading columns
         trade_columns = [
             f'Trade Volume_{year}',
             f'Allowance Purchase Cost_{year}',
@@ -1198,119 +1173,110 @@ class obamodel:
             f'Trade Cost_{year}'
         ]
         for col in trade_columns:
-            self.facilities_data[col] = 0.0
+            if col not in self.facilities_data.columns:
+                self.facilities_data[col] = 0.0
     
-        # Get market positions
-        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
-        print("\nInitial Positions:")
-        print(f"Total Short: {abs(positions[positions < 0].sum()):.2f}")
-        print(f"Total Long: {positions[positions > 0].sum():.2f}")
-    
-        # Identify potential traders based on MAC curves and market price
-        def is_potential_seller(facility):
-            position = facility[f'Allowance Surplus/Deficit_{year}']
-            if position <= 0:
-                return False
-                
-            curve = self.abatement_cost_curve[
-                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ].iloc[0]
-            
-            mac = float(curve['Intercept'])
-            current_abatement = facility[f'Tonnes Abated_{year}']
-            if current_abatement > 0:
-                mac += float(curve['Slope']) * current_abatement
-                
-            return self.market_price > mac
-    
-        def is_potential_buyer(facility):
-            position = facility[f'Allowance Surplus/Deficit_{year}']
-            if position >= 0:
-                return False
-                
-            curve = self.abatement_cost_curve[
-                self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ].iloc[0]
-            
-            mac = float(curve['Intercept'])
-            current_abatement = facility[f'Tonnes Abated_{year}']
-            if current_abatement > 0:
-                mac += float(curve['Slope']) * current_abatement
-                
-            return self.market_price < mac
-    
-        # Identify traders
-        sellers = self.facilities_data[
-            self.facilities_data.apply(is_potential_seller, axis=1)
-        ].copy()
+        # Get positions AFTER abatement
+        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
+            self.facilities_data[f'Allocations_{year}'] - 
+            self.facilities_data[f'Emissions_{year}']
+        )
         
-        buyers = self.facilities_data[
-            self.facilities_data.apply(is_potential_buyer, axis=1)
-        ].copy()
+        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        
+        # Identify buyers (short positions) and sellers (long positions)
+        buyers = self.facilities_data[positions < 0].copy()
+        sellers = self.facilities_data[positions > 0].copy()
     
-        print("\nTrader Analysis:")
-        print(f"Potential Sellers: {len(sellers)} (based on MAC)")
-        print(f"Potential Buyers: {len(buyers)} (based on MAC)")
+        print("\nMarket Participants:")
+        print(f"Buyers (Short): {len(buyers)}")
+        print(f"Sellers (Long): {len(sellers)}")
     
         if buyers.empty or sellers.empty:
             print("No valid trading pairs found.")
             return 0.0, 0.0
     
+        total_volume = 0.0
+        total_cost = 0.0
         MIN_TRADE = 0.0001
+    
+        # Sort buyers by highest MAC (most willing to buy)
+        buyers['MAC'] = buyers.apply(lambda x: self._get_facility_mac(x['Facility ID'], year), axis=1)
+        buyers = buyers.sort_values('MAC', ascending=False)
+    
+        # Sort sellers by lowest MAC (most willing to sell)
+        sellers['MAC'] = sellers.apply(lambda x: self._get_facility_mac(x['Facility ID'], year), axis=1)
+        sellers = sellers.sort_values('MAC')
+    
+        print("\nTrading Analysis:")
+        print(f"Average Buyer MAC: ${buyers['MAC'].mean():.2f}")
+        print(f"Average Seller MAC: ${sellers['MAC'].mean():.2f}")
     
         # Execute trades
         for _, buyer in buyers.iterrows():
-            demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
-            remaining_demand = demand
+            buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
+            if buyer_demand < MIN_TRADE:
+                continue
+    
+            buyer_mac = buyer['MAC']
+            print(f"\nBuyer {buyer['Facility ID']} MAC: ${buyer_mac:.2f}")
     
             for seller_idx, seller in sellers.iterrows():
-                supply = seller[f'Allowance Surplus/Deficit_{year}']
-                if supply <= MIN_TRADE:
+                seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
+                if seller_supply < MIN_TRADE:
                     continue
     
-                volume = min(remaining_demand, supply)
+                seller_mac = seller['MAC']
+                print(f"Seller {seller['Facility ID']} MAC: ${seller_mac:.2f}")
+    
+                # Only trade if economically beneficial
+                if seller_mac >= buyer_mac:
+                    print("Trade not economic - skipping")
+                    continue
+    
+                # Calculate trade volume
+                volume = min(buyer_demand, seller_supply)
                 if volume < MIN_TRADE:
                     continue
     
                 cost = volume * self.market_price
+    
                 print(f"\nExecuting Trade:")
                 print(f"Volume: {volume:.4f}")
                 print(f"Price: ${self.market_price:.2f}")
                 print(f"Cost: ${cost:.2f}")
     
                 # Update buyer
-                self.facilities_data.at[buyer.name, f'Allowance Surplus/Deficit_{year}'] += volume
-                self.facilities_data.at[buyer.name, f'Trade Volume_{year}'] += volume
-                self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}'] += cost
-                self.facilities_data.at[buyer.name, f'Trade Cost_{year}'] += cost
+                self.facilities_data.loc[buyer.name, f'Allowance Surplus/Deficit_{year}'] += volume
+                self.facilities_data.loc[buyer.name, f'Trade Volume_{year}'] += volume
+                self.facilities_data.loc[buyer.name, f'Allowance Purchase Cost_{year}'] += cost
+                self.facilities_data.loc[buyer.name, f'Trade Cost_{year}'] += cost
     
                 # Update seller
-                self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-                self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
-                self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
+                self.facilities_data.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
+                self.facilities_data.loc[seller_idx, f'Trade Volume_{year}'] += volume
+                self.facilities_data.loc[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
     
-                tracker.add_trade(buyer['Facility ID'], seller['Facility ID'], volume, self.market_price)
+                total_volume += volume
+                total_cost += cost
     
-                remaining_demand -= volume
-                if remaining_demand <= MIN_TRADE:
-                    break
-    
+                # Update remaining demand and supply
+                buyer_demand -= volume
                 sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-                if sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] <= MIN_TRADE:
-                    continue
     
-        # Calculate final metrics
-        total_volume, total_cost = tracker.get_metrics()
+                if buyer_demand < MIN_TRADE:
+                    break
     
         # Verify final positions
         final_positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
         final_short = abs(final_positions[final_positions < 0].sum())
         final_long = final_positions[final_positions > 0].sum()
     
-        print("\nFinal Positions:")
+        print("\nTrading Results:")
+        print(f"Total Volume: {total_volume:.2f}")
+        print(f"Total Cost: ${total_cost:.2f}")
         print(f"Final Short: {final_short:.2f}")
         print(f"Final Long: {final_long:.2f}")
-        print(f"Final Net: {(final_long - final_short):.2f}")
     
         return total_volume, total_cost
     
