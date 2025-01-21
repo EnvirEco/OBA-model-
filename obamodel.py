@@ -1152,6 +1152,84 @@ class obamodel:
         print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
 
 # 5. Trading Execution
+    def evaluate_trade_profitability(self, buyer_id: str, seller_id: str, 
+                               volume: float, price: float, year: int) -> Tuple[float, float]:
+        """
+        Evaluate the profitability of a potential trade for both parties.
+        
+        Returns:
+            Tuple of (buyer_profit_impact, seller_profit_impact)
+        """
+        buyer = self.facilities_data[self.facilities_data['Facility ID'] == buyer_id].iloc[0]
+        seller = self.facilities_data[self.facilities_data['Facility ID'] == seller_id].iloc[0]
+        
+        # Get MAC curves
+        buyer_curve = self.abatement_cost_curve[
+            self.abatement_cost_curve['Facility ID'] == buyer_id
+        ].iloc[0]
+        seller_curve = self.abatement_cost_curve[
+            self.abatement_cost_curve['Facility ID'] == seller_id
+        ].iloc[0]
+        
+        # Calculate buyer's alternative cost (MAC)
+        buyer_mac = float(buyer_curve['Intercept']) + (
+            float(buyer_curve['Slope']) * buyer[f'Tonnes Abated_{year}']
+        )
+        
+        # Calculate seller's opportunity cost
+        seller_mac = float(seller_curve['Intercept']) + (
+            float(seller_curve['Slope']) * seller[f'Tonnes Abated_{year}']
+        )
+        
+        # Calculate profit impacts
+        buyer_profit_impact = (buyer_mac - price) * volume  # Savings vs abating
+        seller_profit_impact = (price - seller_mac) * volume  # Revenue vs abating
+        
+        return buyer_profit_impact, seller_profit_impact
+        
+    def optimize_facility_response(self, facility_id: str, market_price: float, year: int) -> Dict:
+        """
+        Optimize a facility's response to current market conditions.
+        Returns optimal mix of abatement and trading.
+        """
+        facility = self.facilities_data[
+            self.facilities_data['Facility ID'] == facility_id
+        ].iloc[0]
+        
+        curve = self.abatement_cost_curve[
+            self.abatement_cost_curve['Facility ID'] == facility_id
+        ].iloc[0]
+        
+        current_emissions = facility[f'Emissions_{year}']
+        allocation = facility[f'Allocations_{year}']
+        position = allocation - current_emissions
+        
+        slope = float(curve['Slope'])
+        intercept = float(curve['Intercept'])
+        max_reduction = float(curve['Max Reduction (MTCO2e)'])
+        
+        # Calculate optimal abatement (where MAC = market price)
+        if slope > 0:
+            optimal_abatement = min(
+                max_reduction,
+                max(0, (market_price - intercept) / slope)
+            )
+        else:
+            optimal_abatement = 0
+            
+        # Calculate trading needs after optimal abatement
+        post_abatement_position = position + optimal_abatement
+        
+        return {
+            'optimal_abatement': optimal_abatement,
+            'trading_volume': abs(post_abatement_position),
+            'is_buyer': post_abatement_position < 0,
+            'abatement_cost': (
+                (slope * optimal_abatement * optimal_abatement / 2) +
+                (intercept * optimal_abatement)
+            ) if optimal_abatement > 0 else 0
+        }
+    
     def trade_allowances(self, year: int) -> Tuple[float, float]:
         """
         Execute trades and return trading metrics.
@@ -1319,9 +1397,41 @@ class obamodel:
         # Calculate cost ratios
         self.calculate_cost_ratios(year)
         
+        # Calculate profits after costs and trading
+        self.calculate_facility_profits(year)
+        
         print(f"\nCost calculations for year {year}:")
         print(f"Total Compliance Cost: {self.facilities_data[f'Compliance Cost_{year}'].sum():,.2f}")
         print(f"Net Market Cost: {self.facilities_data[f'Total Cost_{year}'].sum():,.2f}")
+    
+    def calculate_facility_profits(self, year: int) -> None:
+        """Calculate facility profits considering production, abatement, and trading."""
+        for idx, facility in self.facilities_data.iterrows():
+            # Base production profit
+            output = facility[f'Output_{year}']
+            profit_rate = facility['Baseline Profit Rate']
+            base_profit = output * profit_rate
+            
+            # Compliance costs
+            abatement_cost = facility[f'Abatement Cost_{year}']
+            allowance_purchases = facility[f'Allowance Purchase Cost_{year}']
+            allowance_sales = facility[f'Allowance Sales Revenue_{year}']
+            
+            # Net trading position impact on profits
+            trading_profit = allowance_sales - allowance_purchases
+            
+            # Calculate total profit
+            total_profit = base_profit - abatement_cost + trading_profit
+            
+            # Store results
+            self.facilities_data.at[idx, f'Base Profit_{year}'] = base_profit
+            self.facilities_data.at[idx, f'Trading Profit_{year}'] = trading_profit
+            self.facilities_data.at[idx, f'Total Profit_{year}'] = total_profit
+            
+            # Calculate profit metrics
+            self.facilities_data.at[idx, f'Profit Margin_{year}'] = (
+                total_profit / (output * profit_rate) if output * profit_rate > 0 else 0
+            )
     
     def calculate_cost_ratios(self, year: int) -> None:
         """Calculate cost ratios relative to profit and output."""
@@ -1334,7 +1444,6 @@ class obamodel:
         self.facilities_data[f'Cost to Output Ratio_{year}'] = (
             self.facilities_data[f'Total Cost_{year}'] / self.facilities_data[f'Output_{year}']
         ).replace([float('inf'), -float('inf')], 0).fillna(0)
-
 
 
 # 8. Data Analysis & Summary Creation Methods
