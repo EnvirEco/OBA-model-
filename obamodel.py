@@ -915,6 +915,8 @@ class obamodel:
         print(f"Supply: {supply:.2f}")
         print(f"Demand: {demand:.2f}")
     
+        current_ceiling_price = self.calculate_price_ceiling(year)
+    
         if supply >= demand:
             min_sell_price = float('inf')
             for _, facility in self.facilities_data.iterrows():
@@ -950,21 +952,21 @@ class obamodel:
             if slope > 0:
                 clearing_prices.append(intercept)
                 max_price = intercept + (slope * max_reduction)
-                clearing_prices.append(min(max_price, self.ceiling_price))
+                clearing_prices.append(min(max_price, current_ceiling_price))
     
                 for pct in [0.25, 0.5, 0.75]:
                     price = intercept + (slope * max_reduction * pct)
-                    if price < self.ceiling_price:
+                    if price < current_ceiling_price:
                         clearing_prices.append(price)
     
                 total_potential_abatement += max_reduction
     
-        clearing_prices.append(self.ceiling_price)
+        clearing_prices.append(current_ceiling_price)
         clearing_prices = sorted(set(clearing_prices))
         print(f"\nTesting {len(clearing_prices)} price points...")
         print(f"Total potential abatement: {total_potential_abatement:.2f}")
     
-        best_price = self.ceiling_price
+        best_price = current_ceiling_price
         min_excess_demand = float('inf')
     
         for price in clearing_prices:
@@ -999,7 +1001,7 @@ class obamodel:
                 if excess_demand <= 0:
                     break
     
-        self.market_price = min(best_price, self.ceiling_price)
+        self.market_price = min(best_price, current_ceiling_price)
         print(f"\nFinal Market Determination:")
         print(f"Clearing Price: ${self.market_price:.2f}")
         print(f"Target Abatement: {needed_abatement:.2f}")
