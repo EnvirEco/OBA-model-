@@ -381,14 +381,20 @@ class obamodel:
         print(f"First year columns present: {all(f'{m}_{self.start_year}' in self.facilities_data.columns for m in metrics)}")
         print(f"Last year columns present: {all(f'{m}_{self.end_year}' in self.facilities_data.columns for m in metrics)}")
         
-   
-  
+
 # 3. Core Model Execution Methods
-    def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Execute model with proper sequencing and return value handling."""
-        print("\nExecuting emission trading model...")
+    def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Execute model with banking capabilities."""
+        print("\nExecuting emission trading model with banking...")
+        
+        # Initialize banking columns if needed
+        if hasattr(self, '_initialize_banking_columns'):
+            self._initialize_banking_columns()
+        
         market_summary = []
         sector_summaries = []
+        market_reports = []
+        compliance_reports = []
         
         for year in range(self.start_year, self.end_year + 1):
             print(f"\nProcessing year {year}")
@@ -401,47 +407,59 @@ class obamodel:
                 
                 # 3. Determine initial market price
                 self.market_price = self.determine_market_price(supply, demand, year)
-                print(f"Market price set to: ${self.market_price:.2f}")
                 
-                # 4. Calculate abatement based on this price
+                # 4. Calculate abatement
                 self.calculate_abatement(year)
                 
-                # 5. Execute trades with proper return handling
+                # 5. Make banking decisions if method exists
+                if hasattr(self, 'make_banking_decision'):
+                    self.make_banking_decision(year)
+                
+                # 6. Use banked allowances if method exists
+                if hasattr(self, 'use_banked_allowances'):
+                    self.use_banked_allowances(year)
+                
+                # 7. Execute trades
                 trade_volume, trade_cost = 0.0, 0.0
                 if self.validate_market_price():
                     trade_volume, trade_cost = self.trade_allowances(year)
-                    
-                print(f"\nTrading Results:")
-                print(f"Total Volume: {trade_volume:.2f}")
-                print(f"Total Cost: ${trade_cost:.2f}")
                 
-                # 6. Calculate costs
+                # 8. Calculate costs
                 self.calculate_costs(year)
                 
-                # 7. Record results
+                # 9. Generate reports for this year
+                if hasattr(self, 'generate_market_report'):
+                    market_report = self.generate_market_report(year)
+                    market_reports.append(market_report)
+                
+                if hasattr(self, 'generate_compliance_report'):
+                    compliance_report = self.generate_compliance_report(year)
+                    compliance_reports.append(compliance_report)
+                
+                # 10. Store results
                 market_summary.append(self._create_market_summary(year))
                 sector_summaries.append(self.create_sector_summary(year))
                 
             except Exception as e:
                 print(f"Error in year {year}: {str(e)}")
                 raise
-                
-        # Convert to DataFrames with error handling
+        
+        # Convert all results to DataFrames
         try:
             market_summary_df = pd.DataFrame(market_summary)
             sector_summary_df = pd.concat(sector_summaries, ignore_index=True) if sector_summaries else pd.DataFrame()
-            facility_results = self._prepare_facility_results(
-                start_year=self.start_year, 
-                end_year=self.end_year
-            )
+            facility_results = self._prepare_facility_results(self.start_year, self.end_year)
+            market_reports_df = pd.concat(market_reports, ignore_index=True) if market_reports else pd.DataFrame()
+            compliance_reports_df = pd.concat(compliance_reports, ignore_index=True) if compliance_reports else pd.DataFrame()
             
-            return market_summary_df, sector_summary_df, facility_results
-            
+            return (market_summary_df, sector_summary_df, facility_results, 
+                    compliance_reports_df, market_reports_df)
         except Exception as e:
-            print(f"Error creating summary DataFrames: {str(e)}")
-            # Return empty DataFrames rather than None
-            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-       
+            print(f"Error converting results to DataFrames: {str(e)}")
+            # Return empty DataFrames in case of error
+            return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), 
+                    pd.DataFrame(), pd.DataFrame())
+
     
     def validate_scenario_parameters(self, scenario_type: str, params: Dict) -> bool:
         """Validate parameters for any scenario type"""
@@ -497,98 +515,91 @@ class obamodel:
                 
         return True
     
-    def run_msr_scenario(self) -> Tuple[float, float]:
-        """
-        Run MSR scenario and return stability metrics.
-        """
-        try:
-            # Run through main scenario handler
-            result = self.run_scenario('msr')
-            
-            # Just extract the metrics we want
-            if isinstance(result, dict) and 'metrics' in result:
-                return (
-                    result['metrics'].get('stability', 0.0),
-                    result['metrics'].get('balance', 0.0)
-                )
-            return 0.0, 0.0
-            
-        except Exception as e:
-            print(f"Error in MSR scenario: {str(e)}")
-            return 0.0, 0.0
-
     def run_scenario(self, scenario_type: str, params: Dict = None) -> Dict:
         """
-        Single entry point for running any scenario type.
+        Execute any scenario type with specified parameters.
+        Args:
+            scenario_type: Type of scenario to run (e.g., 'base', 'msr')
+            params: Optional dictionary of scenario parameters
+        Returns:
+            Dictionary containing scenario results
         """
-        print("Starting scenario analysis...")
-    
-        # Define fixed paths
-        base_dir = Path(r"C:\Users\user\AppData\Local\Programs\Python\Python313\OBA_test")
-        scenario_file = base_dir / "scenarios" / "scenarios.csv"
-        facilities_file = base_dir / "data" / "input" / "facilities" / "facilities_data.csv"
-        abatement_file = base_dir / "data" / "input" / "facilities" / "abatement_cost_curve.csv"
-        results_dir = base_dir / "results"
-    
-        # Verify paths
-        print("\nFile paths:")
-        print(f"Scenarios file: {scenario_file}")
-        print(f"Facilities file: {facilities_file}")
-        print(f"Abatement file: {abatement_file}")
-        print(f"Results directory: {results_dir}")
-    
-        # Ensure results directory exists
-        try:
-            results_dir.mkdir(exist_ok=True, parents=True)
-        except Exception as e:
-            print(f"Error creating results directory: {e}")
-            return None
-    
+        print(f"\nExecuting {scenario_type} scenario...")
+        
+        # Set up base parameters
         if params is None:
             params = {}
-    
-        # Set up parameters
+            
+        # Apply base parameters with defaults
         scenario_params = {
-            'floor_price': params.get('floor_price', self.floor_price),
-            'ceiling_price': params.get('ceiling_price', self.ceiling_price),
-            'price_increment': params.get('price_increment', self.price_increment),
-            'output_growth_rate': params.get('output_growth_rate', self.output_growth_rate),
-            'emissions_growth_rate': params.get('emissions_growth_rate', self.emissions_growth_rate),
-            'benchmark_ratchet_rate': params.get('benchmark_ratchet_rate', 0.02)
+            'floor_price': self.floor_price,
+            'ceiling_price': self.ceiling_price,
+            'price_increment': self.price_increment,
+            'output_growth_rate': self.output_growth_rate,
+            'emissions_growth_rate': self.emissions_growth_rate,
+            'benchmark_ratchet_rate': 0.02,
+            'msr_active': False
         }
-    
+        
+        # Update with MSR settings if needed
         if scenario_type == 'msr':
-            scenario_params['msr_active'] = True
-            scenario_params['msr_upper_threshold'] = params.get('msr_upper_threshold', self.msr_upper_threshold)
-            scenario_params['msr_lower_threshold'] = params.get('msr_lower_threshold', self.msr_lower_threshold)
-            scenario_params['msr_adjustment_rate'] = params.get('msr_adjustment_rate', self.msr_adjustment_rate)
-        else:
-            scenario_params['msr_active'] = False
-    
+            scenario_params.update({
+                'msr_active': True,
+                'msr_upper_threshold': self.msr_upper_threshold,
+                'msr_lower_threshold': self.msr_lower_threshold,
+                'msr_adjustment_rate': self.msr_adjustment_rate
+            })
+        
+        # Override with any provided parameters
+        scenario_params.update(params)
+        
         try:
-            print(f"\nExecuting {scenario_type} scenario...")
-            # Run core model
-            market_summary, sector_summary, facility_results = self.run_model()
-    
-            # Calculate metrics (these need to be defined elsewhere in the class)
+            # Run model
+            (market_summary, sector_summary, facility_results, 
+             compliance_reports, market_reports) = self.run_model()
+            
+            # Save results
+            base_path = "results"  # You might want to make this configurable
+            self._save_results_to_files(
+                market_summary=market_summary,
+                sector_summary=sector_summary,
+                facility_results=facility_results,
+                compliance_reports=compliance_reports,
+                market_reports=market_reports,
+                output_file=f"{base_path}/{scenario_type}_results.csv"
+            )
+            
+            # Calculate metrics
             metrics = {
-                'stability': 1.0 - (market_summary['Market_Price'].std() / market_summary['Market_Price'].mean() if market_summary['Market_Price'].mean() > 0 else 0),
-                'balance': market_summary['Market_Balance_Ratio'].mean() if 'Market_Balance_Ratio' in market_summary.columns else 0
+                'stability': self._calculate_stability_metric(market_summary),
+                'balance': self._calculate_balance_metric(market_summary)
             }
     
+            # Return all results
             return {
                 'type': scenario_type,
                 'parameters': scenario_params,
                 'market_summary': market_summary,
                 'sector_summary': sector_summary,
                 'facility_results': facility_results,
+                'compliance_reports': compliance_reports,
+                'market_reports': market_reports,
                 'metrics': metrics
             }
-    
+            
         except Exception as e:
-            print(f"Error in scenario execution: {str(e)}")
-            return self._empty_scenario_result(scenario_type, scenario_params)
-        
+            print(f"Error running {scenario_type} scenario: {str(e)}")
+            return {
+                'type': scenario_type,
+                'parameters': scenario_params,
+                'market_summary': pd.DataFrame(),
+                'sector_summary': pd.DataFrame(),
+                'facility_results': pd.DataFrame(),
+                'compliance_reports': pd.DataFrame(),
+                'market_reports': pd.DataFrame(),
+                'metrics': {'stability': 0.0, 'balance': 0.0}
+            }  
+       
     def _empty_scenario_result(self, scenario_type: str, params: Dict) -> Dict:
         """Return empty result structure for failed scenarios"""
         return {
@@ -597,12 +608,14 @@ class obamodel:
             'market_summary': pd.DataFrame(),
             'sector_summary': pd.DataFrame(),
             'facility_results': pd.DataFrame(),
+            'compliance_reports': pd.DataFrame(),
+            'market_reports': pd.DataFrame(),
             'metrics': {
                 'stability': 0.0,
                 'balance': 0.0
             }
         }
-
+    
     def integrate_periodic_adjustment(self, year: int) -> Tuple[float, float]:
         """Integration point for periodic benchmark adjustment in the main model execution."""
         # Calculate initial values
@@ -1151,6 +1164,154 @@ class obamodel:
         print(f"  Cost: ${cost:.2f}")
         print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
 
+
+    def _initialize_banking_columns(self) -> None:
+        """Initialize columns needed for banking."""
+        # Add banking columns for each year
+        for year in range(self.start_year, self.end_year + 1):
+            self.facilities_data[f'Banked_Allowances_{year}'] = 0.0
+            self.facilities_data[f'Banking_Decision_{year}'] = 0.0
+            self.facilities_data[f'Used_Banked_Allowances_{year}'] = 0.0
+
+    def calculate_banking_incentive(self, current_year: int, facility_id: str) -> float:
+        """
+        Calculate banking incentive based on price ceiling trajectory.
+        Returns value between 0 and 1 indicating banking attractiveness.
+        """
+        # Get current market conditions
+        current_price = self.market_price
+        current_ceiling = self.calculate_price_ceiling(current_year)
+        
+        # Look ahead one year
+        next_year_ceiling = self.calculate_price_ceiling(current_year + 1)
+        
+        # Calculate price gaps
+        ceiling_increase = next_year_ceiling - current_ceiling
+        current_headroom = current_ceiling - current_price
+        
+        # Banking is more attractive when:
+        # 1. Current price is well below ceiling (more room for appreciation)
+        # 2. Ceiling will increase significantly next year
+        # Normalize to 0-1 scale
+        price_gap_ratio = current_headroom / current_ceiling
+        ceiling_growth_ratio = ceiling_increase / current_ceiling
+        
+        # Combine factors (equal weights)
+        banking_incentive = 0.5 * price_gap_ratio + 0.5 * ceiling_growth_ratio
+        
+        # Cap between 0 and 1
+        return max(0.0, min(1.0, banking_incentive))
+
+    def make_banking_decision(self, year: int) -> None:
+        """
+        Make banking decisions for all facilities based on price ceiling trajectory.
+        """
+        print(f"\n=== Making Banking Decisions for Year {year} ===")
+        
+        # Skip if last year
+        if year >= self.end_year:
+            print("Final year - no banking decisions needed")
+            return
+            
+        BANKING_LIMIT = 0.2  # Maximum 20% of surplus can be banked
+        MIN_BANKING_INCENTIVE = 0.1  # Minimum incentive to trigger banking
+        
+        total_banked = 0.0
+        facilities_banking = 0
+        
+        for idx, facility in self.facilities_data.iterrows():
+            # Skip if no surplus
+            surplus = facility[f'Allowance Surplus/Deficit_{year}']
+            if surplus <= 0:
+                continue
+                
+            # Calculate banking incentive
+            incentive = self.calculate_banking_incentive(year, facility['Facility ID'])
+            
+            if incentive > MIN_BANKING_INCENTIVE:
+                # Calculate amount to bank
+                max_banking = surplus * BANKING_LIMIT
+                banking_amount = max_banking * incentive
+                
+                # Update facility data
+                self.facilities_data.at[idx, f'Banking_Decision_{year}'] = banking_amount
+                self.facilities_data.at[idx, f'Banked_Allowances_{year}'] = banking_amount
+                self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] -= banking_amount
+                
+                total_banked += banking_amount
+                facilities_banking += 1
+                
+                print(f"\nFacility {facility['Facility ID']} banking decision:")
+                print(f"  Surplus: {surplus:.2f}")
+                print(f"  Incentive: {incentive:.2f}")
+                print(f"  Banking Amount: {banking_amount:.2f}")
+        
+        print(f"\nTotal Banking Summary:")
+        print(f"Facilities Banking: {facilities_banking}")
+        print(f"Total Allowances Banked: {total_banked:.2f}")
+
+    def use_banked_allowances(self, year: int) -> None:
+        """
+        Determine usage of banked allowances based on current market conditions.
+        """
+        if year <= self.start_year:
+            return
+            
+        print(f"\n=== Using Banked Allowances for Year {year} ===")
+        
+        # Get previous year's banking
+        prev_year = year - 1
+        banked_cols = [col for col in self.facilities_data.columns if col.startswith('Banked_Allowances_')]
+        
+        total_used = 0.0
+        facilities_using = 0
+        
+        for idx, facility in self.facilities_data.iterrows():
+            # Calculate total banked allowances available
+            available_banked = sum(facility[col] for col in banked_cols)
+            
+            if available_banked <= 0:
+                continue
+                
+            # Check if facility needs allowances
+            deficit = -facility[f'Allowance Surplus/Deficit_{year}']
+            if deficit <= 0:
+                continue
+                
+            # Calculate if profitable to use banked allowances
+            current_price = self.market_price
+            ceiling_price = self.calculate_price_ceiling(year)
+            
+            # Use banked allowances if current price is close to ceiling
+            price_ratio = current_price / ceiling_price
+            if price_ratio > 0.8:  # Use if price > 80% of ceiling
+                use_amount = min(available_banked, deficit)
+                
+                # Update facility data
+                self.facilities_data.at[idx, f'Used_Banked_Allowances_{year}'] = use_amount
+                self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += use_amount
+                
+                # Clear used allowances from banked amounts
+                remaining = use_amount
+                for col in sorted(banked_cols):
+                    if remaining <= 0:
+                        break
+                    banked = facility[col]
+                    use_from_this_year = min(banked, remaining)
+                    self.facilities_data.at[idx, col] -= use_from_this_year
+                    remaining -= use_from_this_year
+                
+                total_used += use_amount
+                facilities_using += 1
+                
+                print(f"\nFacility {facility['Facility ID']} using banked allowances:")
+                print(f"  Deficit: {deficit:.2f}")
+                print(f"  Used Amount: {use_amount:.2f}")
+        
+        print(f"\nBanked Allowances Usage Summary:")
+        print(f"Facilities Using Banked Allowances: {facilities_using}")
+        print(f"Total Banked Allowances Used: {total_used:.2f}")
+
 # 5. Trading Execution
     def evaluate_trade_profitability(self, buyer_id: str, seller_id: str, 
                                volume: float, price: float, year: int) -> Tuple[float, float]:
@@ -1645,37 +1806,203 @@ class obamodel:
         
         return summary
 
-    def _save_results_to_files(self, market_summary: pd.DataFrame, 
-                                  sector_summary: pd.DataFrame,
-                                  facility_results: pd.DataFrame, 
-                                  output_file: str) -> None:
-            """
-            Internal method to save results to files.
+   
+    def generate_compliance_report(self, year: int) -> pd.DataFrame:
+        """
+        Generate a compliance report showing how obligations were met and banking status.
+        """
+        print(f"\n=== Compliance Report for Year {year} ===")
+        
+        # Create report dataframe
+        report_data = []
+        
+        for _, facility in self.facilities_data.iterrows():
+            # Get basic facility info
+            facility_id = facility['Facility ID']
+            sector = facility['Sector']
             
-            Args:
-                market_summary: DataFrame with market-level metrics
-                sector_summary: DataFrame with sector-level metrics
-                facility_results: DataFrame with facility-level results
-                output_file: Base name for output files
-            """
-            try:
-                # Save market summary
-                market_file = f"market_summary_{output_file}"
-                market_summary.to_csv(market_file, index=False)
-                print(f"Market summary saved to {market_file}")
+            # Get compliance requirements
+            emissions = facility[f'Emissions_{year}']
+            allocations = facility[f'Allocations_{year}']
+            
+            # Get compliance actions
+            abatement = facility[f'Tonnes Abated_{year}']
+            trade_volume = facility[f'Trade Volume_{year}']
+            purchased = facility[f'Allowance Purchase Cost_{year}'] > 0
+            sold = facility[f'Allowance Sales Revenue_{year}'] > 0
+            
+            # Get banking information
+            banked_this_year = facility[f'Banking_Decision_{year}']
+            used_banked = facility[f'Used_Banked_Allowances_{year}']
+            total_banked = sum(
+                facility[col] 
+                for col in facility.index 
+                if col.startswith('Banked_Allowances_')
+            )
+            
+            # Calculate compliance status
+            final_position = facility[f'Allowance Surplus/Deficit_{year}']
+            compliant = final_position >= 0
+            
+            # Create compliance method string
+            methods = []
+            if allocations > 0:
+                methods.append("Initial Allocation")
+            if abatement > 0:
+                methods.append("Abatement")
+            if purchased:
+                methods.append("Purchases")
+            if used_banked > 0:
+                methods.append("Used Banked")
+            
+            report_data.append({
+                'Facility ID': facility_id,
+                'Sector': sector,
+                'Compliance Status': 'Compliant' if compliant else 'Non-Compliant',
+                'Emissions (tCO2e)': emissions,
+                'Allocations (tCO2e)': allocations,
+                'Abatement (tCO2e)': abatement,
+                'Compliance Methods': ", ".join(methods),
+                'Trading Activity': 'Purchased' if purchased else ('Sold' if sold else 'None'),
+                'Final Position (tCO2e)': final_position,
+                'Banked This Year (tCO2e)': banked_this_year,
+                'Used Banked This Year (tCO2e)': used_banked,
+                'Total Currently Banked (tCO2e)': total_banked
+            })
+        
+        report_df = pd.DataFrame(report_data)
+        
+        # Print summary statistics
+        print("\nCompliance Summary:")
+        print(f"Total Facilities: {len(report_df)}")
+        print(f"Compliant Facilities: {(report_df['Compliance Status'] == 'Compliant').sum()}")
+        print(f"Total Emissions: {report_df['Emissions (tCO2e)'].sum():,.2f} tCO2e")
+        print(f"Total Abatement: {report_df['Abatement (tCO2e)'].sum():,.2f} tCO2e")
+        print(f"Total Banked: {report_df['Total Currently Banked (tCO2e)'].sum():,.2f} tCO2e")
+        
+        # Print sector summary
+        print("\nSector Compliance Summary:")
+        sector_summary = report_df.groupby('Sector').agg({
+            'Facility ID': 'count',
+            'Compliance Status': lambda x: (x == 'Compliant').sum(),
+            'Emissions (tCO2e)': 'sum',
+            'Abatement (tCO2e)': 'sum',
+            'Total Currently Banked (tCO2e)': 'sum'
+        }).round(2)
+        
+        sector_summary.columns = [
+            'Total Facilities', 'Compliant Facilities', 
+            'Total Emissions', 'Total Abatement', 'Total Banked'
+        ]
+        print(sector_summary)
+        
+        return report_df  
+
+    def generate_market_report(self, year: int) -> pd.DataFrame:
+        """
+        Generate a market report showing price, trading, and market balance information.
+        Returns a flattened DataFrame suitable for CSV export.
+        """
+        print(f"\n=== Market Report for Year {year} ===")
+        
+        # Calculate key market metrics
+        total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
+        total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
+        total_abatement = self.facilities_data[f'Tonnes Abated_{year}'].sum()
+        total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum() / 2
+        total_banked = self.facilities_data[f'Banking_Decision_{year}'].sum()
+        total_used_banked = self.facilities_data[f'Used_Banked_Allowances_{year}'].sum()
+        
+        # Calculate market positions
+        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        total_short = abs(positions[positions < 0].sum())
+        total_long = positions[positions > 0].sum()
+        
+        # Calculate price metrics
+        current_ceiling = self.calculate_price_ceiling(year)
+        price_to_ceiling_ratio = self.market_price / current_ceiling if current_ceiling > 0 else 0
+        
+        # Create flattened data structure for easy CSV export
+        market_data = {
+            'Year': year,
+            'Market_Price': self.market_price,
+            'Price_Ceiling': current_ceiling,
+            'Price_Ceiling_Ratio': price_to_ceiling_ratio,
+            'Total_Allocations': total_allocations,
+            'Total_Emissions': total_emissions,
+            'Net_Market_Position': total_allocations - total_emissions,
+            'Total_Short_Position': total_short,
+            'Total_Long_Position': total_long,
+            'Total_Trade_Volume': total_trade_volume,
+            'Trading_Turnover_Rate': total_trade_volume/total_allocations if total_allocations > 0 else 0,
+            'Total_Abatement': total_abatement,
+            'Abatement_Rate': total_abatement/total_emissions if total_emissions > 0 else 0,
+            'Newly_Banked_Allowances': total_banked,
+            'Used_Banked_Allowances': total_used_banked,
+            'Banking_Rate': total_banked/total_allocations if total_allocations > 0 else 0
+        }
+        
+        # Create DataFrame
+        report_df = pd.DataFrame([market_data])
+        
+        # Print formatted report for display
+        print("\nMARKET REPORT")
+        print("=============")
+        print(f"Market Price: ${market_data['Market_Price']:.2f}")
+        print(f"Price Ceiling: ${market_data['Price_Ceiling']:.2f}")
+        print(f"Price/Ceiling Ratio: {market_data['Price_Ceiling_Ratio']:.2%}")
+        print(f"\nTotal Allocations: {market_data['Total_Allocations']:,.0f}")
+        print(f"Total Emissions: {market_data['Total_Emissions']:,.0f}")
+        print(f"Net Position: {market_data['Net_Market_Position']:,.0f}")
+        print(f"\nTrading Volume: {market_data['Total_Trade_Volume']:,.0f}")
+        print(f"Abatement: {market_data['Total_Abatement']:,.0f}")
+        print(f"Banking: {market_data['Newly_Banked_Allowances']:,.0f}")
+        
+        return report_df
+    
+    def _save_results_to_files(self, market_summary: pd.DataFrame, 
+                              sector_summary: pd.DataFrame,
+                              facility_results: pd.DataFrame,
+                              compliance_reports: pd.DataFrame,
+                              market_reports: pd.DataFrame, 
+                              output_file: str) -> None:
+        """Save all model results to files."""
+        try:
+            base_path = Path(output_file).parent
+            base_name = Path(output_file).stem
+            
+            # Save market summary
+            market_file = base_path / f"{base_name}_market_summary.csv"
+            market_summary.to_csv(market_file, index=False)
+            print(f"Market summary saved to {market_file}")
+            
+            # Save sector summary
+            if not sector_summary.empty:
+                sector_file = base_path / f"{base_name}_sector_summary.csv"
+                sector_summary.to_csv(sector_file, index=False)
+                print(f"Sector summary saved to {sector_file}")
+            
+            # Save facility results
+            facility_file = base_path / f"{base_name}_facility_results.csv"
+            facility_results.to_csv(facility_file, index=False)
+            print(f"Facility results saved to {facility_file}")
+            
+            # Save compliance reports
+            if not compliance_reports.empty:
+                compliance_file = base_path / f"{base_name}_compliance_reports.csv"
+                compliance_reports.to_csv(compliance_file, index=False)
+                print(f"Compliance reports saved to {compliance_file}")
+            
+            # Save market reports
+            if not market_reports.empty:
+                market_report_file = base_path / f"{base_name}_market_reports.csv"
+                market_reports.to_csv(market_report_file, index=False)
+                print(f"Market reports saved to {market_report_file}")
                 
-                # Save sector summary if not empty
-                if not sector_summary.empty:
-                    sector_file = f"sector_summary_{output_file}"
-                    sector_summary.to_csv(sector_file, index=False)
-                    print(f"Sector summary saved to {sector_file}")
-                
-                # Save facility results
-                facility_results.to_csv(output_file, index=False)
-                print(f"Facility results saved to {output_file}")
-                
-            except Exception as e:
-                print(f"Error saving results: {str(e)}")
+        except Exception as e:
+            print(f"Error saving results: {str(e)}")
+            raise
+     
 
     def _create_scenario_comparison(self, scenario_results: List[Dict]) -> pd.DataFrame:
         """
