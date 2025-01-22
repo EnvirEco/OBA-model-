@@ -21,6 +21,7 @@ class obamodel:
             param_bounds = {
                 'Floor Price': (0, None),
                 'Ceiling Price': (0, None),
+                'Price Increment': (0, None),
                 'Output Growth Rate': (-0.5, 0.5),
                 'Emissions Growth Rate': (-0.5, 0.5),
                 'Benchmark Ratchet Rate': (0, 1),
@@ -46,6 +47,7 @@ class obamodel:
                     "name": row["Scenario"],
                     "floor_price": float(row["Floor Price"]),
                     "ceiling_price": float(row["Ceiling Price"]),
+                    "price_increment": float(row["Price Increment"]), 
                     "output_growth_rate": float(row["Output Growth Rate"]),
                     "emissions_growth_rate": float(row["Emissions Growth Rate"]),
                     "benchmark_ratchet_rate": float(row["Benchmark Ratchet Rate"]),
@@ -88,18 +90,17 @@ class obamodel:
         self.start_year = start_year
         self.end_year = end_year
         
-        # Price parameters - use consistent naming
         self.floor_price = scenario_params.get("floor_price", 20)
-        self.ceiling_price = scenario_params.get("ceiling_price", 200)  # Changed from initial_ceiling_price
-        self.price_increment = scenario_params.get("price_increment", 10)
+        self.ceiling_price = scenario_params.get("ceiling_price", 200)
+        self.price_increment = scenario_params.get("price_increment", 10)  # Get from scenario
         self.market_price = self.floor_price  # Initialize market price
         
         print("\nPrice Control Parameters:")
         print(f"Floor Price: ${self.floor_price:.2f}")
-        print(f"Ceiling Price: ${self.ceiling_price:.2f}")  # Changed name here too
+        print(f"Base Ceiling Price: ${self.ceiling_price:.2f}")
         print(f"Price Increment: ${self.price_increment:.2f}/year")
         print(f"Initial Market Price: ${self.market_price:.2f}")
-                     
+                              
         # Verify facility data
         print("\nFacility Data Verification:")
         print(f"Number of facilities: {len(self.facilities_data)}")
@@ -460,145 +461,113 @@ class obamodel:
             return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), 
                     pd.DataFrame(), pd.DataFrame())
 
-    
     def validate_scenario_parameters(self, scenario_type: str, params: Dict) -> bool:
         """Validate parameters for any scenario type"""
-        # Base parameter validation
+        # Validate base parameters
         base_params = {
-            'floor_price': (0, None),  # No upper limit
+            'floor_price': (0, None),
             'ceiling_price': (0, None),
-            'price_increment': (0, None),
+            'price_increment': (0, None),  # Add explicit validation for price_increment
             'output_growth_rate': (-0.5, 0.5),
             'emissions_growth_rate': (-0.5, 0.5),
             'benchmark_ratchet_rate': (0, 1)
         }
         
-        # Validate base parameters first
+        # Validate each parameter
         for param, (min_val, max_val) in base_params.items():
             value = params.get(param)
-            if value is None:
-                print(f"Missing required parameter: {param}")
-                return False
-            if not isinstance(value, (int, float)):
-                print(f"Parameter {param} must be numeric")
-                return False
-            if min_val is not None and value < min_val:
-                print(f"Parameter {param} must be >= {min_val}")
-                return False
-            if max_val is not None and value > max_val:
-                print(f"Parameter {param} must be <= {max_val}")
-                return False
-
-        # MSR-specific validation
-        if scenario_type == 'msr':
-            msr_params = {
-                'msr_upper_threshold': (0, 1),
-                'msr_lower_threshold': (-1, 0),
-                'msr_adjustment_rate': (0, 1)
-            }
-            
-            for param, (min_val, max_val) in msr_params.items():
-                value = params.get(param)
-                if value is None:
-                    print(f"Missing required MSR parameter: {param}")
-                    return False
+            if value is not None:  # Only validate if parameter is provided
                 if not isinstance(value, (int, float)):
-                    print(f"MSR parameter {param} must be numeric")
+                    print(f"Parameter {param} must be numeric")
                     return False
-                if value < min_val or value > max_val:
-                    print(f"MSR parameter {param} must be between {min_val} and {max_val}")
+                if min_val is not None and value < min_val:
+                    print(f"Parameter {param} must be >= {min_val}")
                     return False
-            
-            if params['msr_upper_threshold'] <= params['msr_lower_threshold']:
-                print("MSR upper threshold must be greater than lower threshold")
+                if max_val is not None and value > max_val:
+                    print(f"Parameter {param} must be <= {max_val}")
+                    return False
+        
+        # Additional validation for ceiling price relationship
+        if 'ceiling_price' in params and 'floor_price' in params:
+            if params['ceiling_price'] <= params['floor_price']:
+                print("Ceiling price must be greater than floor price")
                 return False
-                
-        return True
+        
+        return True    
+
     
     def run_scenario(self, scenario_type: str, params: Dict = None) -> Dict:
-        """
-        Execute any scenario type with specified parameters.
-        Args:
-            scenario_type: Type of scenario to run (e.g., 'base', 'msr')
-            params: Optional dictionary of scenario parameters
-        Returns:
-            Dictionary containing scenario results
-        """
+        """Execute any scenario type with specified parameters."""
         print(f"\nExecuting {scenario_type} scenario...")
         
         # Set up base parameters
         if params is None:
             params = {}
-            
-        # Apply base parameters with defaults
-        scenario_params = {
-            'floor_price': self.floor_price,
+                
+        # Store original values to restore later
+        original_values = {
             'ceiling_price': self.ceiling_price,
             'price_increment': self.price_increment,
             'output_growth_rate': self.output_growth_rate,
             'emissions_growth_rate': self.emissions_growth_rate,
-            'benchmark_ratchet_rate': 0.02,
-            'msr_active': False
+            'benchmark_ratchet_rate': self.benchmark_ratchet_rate,
+            'msr_active': self.msr_active if hasattr(self, 'msr_active') else False
         }
         
-        # Update with MSR settings if needed
-        if scenario_type == 'msr':
-            scenario_params.update({
-                'msr_active': True,
-                'msr_upper_threshold': self.msr_upper_threshold,
-                'msr_lower_threshold': self.msr_lower_threshold,
-                'msr_adjustment_rate': self.msr_adjustment_rate
-            })
-        
-        # Override with any provided parameters
-        scenario_params.update(params)
-        
         try:
+            # Create scenario parameters dictionary
+            scenario_params = {
+                'floor_price': params.get('floor_price', self.floor_price),
+                'ceiling_price': params.get('ceiling_price', self.ceiling_price),
+                'price_increment': params.get('price_increment', self.price_increment),
+                'output_growth_rate': params.get('output_growth_rate', self.output_growth_rate),
+                'emissions_growth_rate': params.get('emissions_growth_rate', self.emissions_growth_rate),
+                'benchmark_ratchet_rate': params.get('benchmark_ratchet_rate', 0.02),
+                'msr_active': False
+            }
+    
+            # Update class attributes with scenario parameters
+            self.ceiling_price = scenario_params['ceiling_price']
+            self.price_increment = scenario_params['price_increment']  # Ensure this is set
+            self.output_growth_rate = scenario_params['output_growth_rate']
+            self.emissions_growth_rate = scenario_params['emissions_growth_rate']
+            self.benchmark_ratchet_rate = scenario_params['benchmark_ratchet_rate']
+            
+            # Print scenario settings for verification
+            print("\nScenario Parameter Verification:")
+            print(f"Ceiling Price: ${self.ceiling_price:.2f}")
+            print(f"Price Increment: ${self.price_increment:.2f}/year")
+            print(f"Output Growth Rate: {self.output_growth_rate:.3f}")
+            print(f"Emissions Growth Rate: {self.emissions_growth_rate:.3f}")
+            
+            # Add specific verification for price increment
+            print("\nPrice Ceiling Path Verification:")
+            for test_year in range(self.start_year, self.end_year + 1):
+                ceiling = self.calculate_price_ceiling(test_year)
+                print(f"Year {test_year} Ceiling: ${ceiling:.2f}")
+            
             # Run model
             (market_summary, sector_summary, facility_results, 
              compliance_reports, market_reports) = self.run_model()
             
-            # Save results
-            base_path = "results"  # You might want to make this configurable
-            self._save_results_to_files(
-                market_summary=market_summary,
-                sector_summary=sector_summary,
-                facility_results=facility_results,
-                compliance_reports=compliance_reports,
-                market_reports=market_reports,
-                output_file=f"{base_path}/{scenario_type}_results.csv"
-            )
-            
-            # Calculate metrics
-            metrics = {
-                'stability': self._calculate_stability_metric(market_summary),
-                'balance': self._calculate_balance_metric(market_summary)
-            }
-    
-            # Return all results
             return {
                 'type': scenario_type,
-                'parameters': scenario_params,
+                'parameters': scenario_params,  # Use the full scenario_params
                 'market_summary': market_summary,
                 'sector_summary': sector_summary,
                 'facility_results': facility_results,
                 'compliance_reports': compliance_reports,
                 'market_reports': market_reports,
-                'metrics': metrics
+                'metrics': {
+                    'stability': self._calculate_stability_metric(market_summary),
+                    'balance': self._calculate_balance_metric(market_summary)
+                }
             }
             
-        except Exception as e:
-            print(f"Error running {scenario_type} scenario: {str(e)}")
-            return {
-                'type': scenario_type,
-                'parameters': scenario_params,
-                'market_summary': pd.DataFrame(),
-                'sector_summary': pd.DataFrame(),
-                'facility_results': pd.DataFrame(),
-                'compliance_reports': pd.DataFrame(),
-                'market_reports': pd.DataFrame(),
-                'metrics': {'stability': 0.0, 'balance': 0.0}
-            }  
+        finally:
+            # Restore original values
+            for key, value in original_values.items():
+                setattr(self, key, value)
        
     def _empty_scenario_result(self, scenario_type: str, params: Dict) -> Dict:
         """Return empty result structure for failed scenarios"""
@@ -897,24 +866,27 @@ class obamodel:
 
 # 4. Price Determination and Abatement
     def calculate_price_ceiling(self, year: int) -> float:
-        """Calculate the price ceiling for a given year."""
+        """Calculate the price ceiling for a given year using scenario parameters."""
         years_elapsed = year - self.start_year
-        ceiling = self.ceiling_price + (self.price_increment * years_elapsed)  # Changed from initial_ceiling_price
+        # Use scenario-specific price increment
+        ceiling = self.ceiling_price + (self.price_increment * years_elapsed)
         
         print(f"Ceiling calculation for year {year}:")
-        print(f"Base ceiling: ${self.ceiling_price:.2f}")  # Changed name here too
+        print(f"Base ceiling: ${self.ceiling_price:.2f}")
         print(f"Years elapsed: {years_elapsed}")
         print(f"Price increment: ${self.price_increment:.2f}")
         print(f"Calculated ceiling: ${ceiling:.2f}")
         
-        return ceiling
+        return ceiling 
 
     def determine_market_price(self, supply: float, demand: float, year: int) -> float:
-        """Determine market price based on supply/demand and MAC curves, with price ceiling."""
+        """Determine market price based on supply/demand and MAC curves."""
         print(f"\n=== Market Price Determination for Year {year} ===")
         print(f"Supply: {supply:.2f}")
         print(f"Demand: {demand:.2f}")
-    
+        print(f"Current Base Ceiling: ${self.ceiling_price:.2f}")
+        print(f"Current Price Increment: ${self.price_increment:.2f}/year")
+        
         current_ceiling_price = self.calculate_price_ceiling(year)
     
         if supply >= demand:
@@ -1010,17 +982,19 @@ class obamodel:
         return self.market_price
     
     def validate_market_price(self) -> bool:
+        """Validate that the market price is within bounds."""
         if not isinstance(self.market_price, (int, float)):
             print(f"ERROR: Invalid market price type: {type(self.market_price)}")
             return False
         if self.market_price < self.floor_price:
             print(f"ERROR: Market price ${self.market_price:.2f} below floor ${self.floor_price:.2f}")
             return False
-        if self.market_price > self.ceiling_price:
-            print(f"ERROR: Market price ${self.market_price:.2f} above ceiling ${self.ceiling_price:.2f}")
+        current_ceiling = self.calculate_price_ceiling(self.start_year)  # Get current ceiling
+        if self.market_price > current_ceiling:
+            print(f"ERROR: Market price ${self.market_price:.2f} above ceiling ${current_ceiling:.2f}")
             return False
         return True
-
+      
     def _build_mac_curve(self, year: int) -> List[float]:
         """Build MAC curve with facility-specific characteristics."""
         mac_points = []
@@ -1812,11 +1786,16 @@ class obamodel:
     def generate_compliance_report(self, year: int) -> pd.DataFrame:
         """
         Generate a compliance report showing how obligations were met and banking status.
+        Added ceiling price compliance calculations.
         """
         print(f"\n=== Compliance Report for Year {year} ===")
         
         # Create report dataframe
         report_data = []
+        
+        ceiling_price = self.calculate_price_ceiling(year)
+        total_ceiling_value = 0
+        total_ceiling_volume = 0
         
         for _, facility in self.facilities_data.iterrows():
             # Get basic facility info
@@ -1842,9 +1821,16 @@ class obamodel:
                 if col.startswith('Banked_Allowances_')
             )
             
-            # Calculate compliance status
+            # Calculate compliance status and ceiling price obligation
             final_position = facility[f'Allowance Surplus/Deficit_{year}']
             compliant = final_position >= 0
+            
+            # Calculate ceiling price values
+            ceiling_volume = abs(min(0, final_position))  # Volume needed for compliance
+            ceiling_value = ceiling_volume * ceiling_price
+            
+            total_ceiling_volume += ceiling_volume
+            total_ceiling_value += ceiling_value
             
             # Create compliance method string
             methods = []
@@ -1869,7 +1855,9 @@ class obamodel:
                 'Final Position (tCO2e)': final_position,
                 'Banked This Year (tCO2e)': banked_this_year,
                 'Used Banked This Year (tCO2e)': used_banked,
-                'Total Currently Banked (tCO2e)': total_banked
+                'Total Currently Banked (tCO2e)': total_banked,
+                'Ceiling Price Volume (tCO2e)': ceiling_volume,
+                'Ceiling Price Value ($)': ceiling_value
             })
         
         report_df = pd.DataFrame(report_data)
@@ -1881,6 +1869,8 @@ class obamodel:
         print(f"Total Emissions: {report_df['Emissions (tCO2e)'].sum():,.2f} tCO2e")
         print(f"Total Abatement: {report_df['Abatement (tCO2e)'].sum():,.2f} tCO2e")
         print(f"Total Banked: {report_df['Total Currently Banked (tCO2e)'].sum():,.2f} tCO2e")
+        print(f"Total Ceiling Price Volume: {total_ceiling_volume:,.2f} tCO2e")
+        print(f"Total Ceiling Price Value: ${total_ceiling_value:,.2f}")
         
         # Print sector summary
         print("\nSector Compliance Summary:")
@@ -1889,21 +1879,24 @@ class obamodel:
             'Compliance Status': lambda x: (x == 'Compliant').sum(),
             'Emissions (tCO2e)': 'sum',
             'Abatement (tCO2e)': 'sum',
-            'Total Currently Banked (tCO2e)': 'sum'
+            'Total Currently Banked (tCO2e)': 'sum',
+            'Ceiling Price Volume (tCO2e)': 'sum',
+            'Ceiling Price Value ($)': 'sum'
         }).round(2)
         
         sector_summary.columns = [
             'Total Facilities', 'Compliant Facilities', 
-            'Total Emissions', 'Total Abatement', 'Total Banked'
+            'Total Emissions', 'Total Abatement', 'Total Banked',
+            'Ceiling Price Volume', 'Ceiling Price Value'
         ]
         print(sector_summary)
         
-        return report_df  
-
+        return report_df
+    
     def generate_market_report(self, year: int) -> pd.DataFrame:
         """
         Generate a market report showing price, trading, and market balance information.
-        Returns a flattened DataFrame suitable for CSV export.
+        Added ceiling price compliance calculations.
         """
         print(f"\n=== Market Report for Year {year} ===")
         
@@ -1920,11 +1913,13 @@ class obamodel:
         total_short = abs(positions[positions < 0].sum())
         total_long = positions[positions > 0].sum()
         
-        # Calculate price metrics
+        # Calculate ceiling price metrics
         current_ceiling = self.calculate_price_ceiling(year)
         price_to_ceiling_ratio = self.market_price / current_ceiling if current_ceiling > 0 else 0
+        ceiling_volume = abs(positions[positions < 0].sum())  # Total short position
+        ceiling_value = ceiling_volume * current_ceiling
         
-        # Create flattened data structure for easy CSV export
+        # Create market report dictionary
         market_data = {
             'Year': year,
             'Market_Price': self.market_price,
@@ -1932,7 +1927,7 @@ class obamodel:
             'Price_Ceiling_Ratio': price_to_ceiling_ratio,
             'Total_Allocations': total_allocations,
             'Total_Emissions': total_emissions,
-            'Net_Market_Position': total_allocations - total_emissions,
+            'Net_Position': total_allocations - total_emissions,
             'Total_Short_Position': total_short,
             'Total_Long_Position': total_long,
             'Total_Trade_Volume': total_trade_volume,
@@ -1941,24 +1936,23 @@ class obamodel:
             'Abatement_Rate': total_abatement/total_emissions if total_emissions > 0 else 0,
             'Newly_Banked_Allowances': total_banked,
             'Used_Banked_Allowances': total_used_banked,
-            'Banking_Rate': total_banked/total_allocations if total_allocations > 0 else 0
+            'Banking_Rate': total_banked/total_allocations if total_allocations > 0 else 0,
+            'Ceiling_Price_Volume': ceiling_volume,
+            'Ceiling_Price_Value': ceiling_value
         }
         
         # Create DataFrame
         report_df = pd.DataFrame([market_data])
         
-        # Print formatted report for display
+        # Print formatted report
         print("\nMARKET REPORT")
         print("=============")
         print(f"Market Price: ${market_data['Market_Price']:.2f}")
         print(f"Price Ceiling: ${market_data['Price_Ceiling']:.2f}")
         print(f"Price/Ceiling Ratio: {market_data['Price_Ceiling_Ratio']:.2%}")
-        print(f"\nTotal Allocations: {market_data['Total_Allocations']:,.0f}")
-        print(f"Total Emissions: {market_data['Total_Emissions']:,.0f}")
-        print(f"Net Position: {market_data['Net_Market_Position']:,.0f}")
-        print(f"\nTrading Volume: {market_data['Total_Trade_Volume']:,.0f}")
-        print(f"Abatement: {market_data['Total_Abatement']:,.0f}")
-        print(f"Banking: {market_data['Newly_Banked_Allowances']:,.0f}")
+        print(f"Total Trade Volume: {market_data['Total_Trade_Volume']:,.0f}")
+        print(f"Ceiling Price Volume: {market_data['Ceiling_Price_Volume']:,.0f}")
+        print(f"Ceiling Price Value: ${market_data['Ceiling_Price_Value']:,.2f}")
         
         return report_df
     
