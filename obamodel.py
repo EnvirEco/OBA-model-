@@ -1568,7 +1568,7 @@ class obamodel:
                 payment = abs(surplus_deficit) * ceiling_price
                 self.facilities_data.at[index, f'Ceiling Price Payment_{year}'] = payment
                 self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] = 0  # Clear deficit
-                self.government_revenue += payment
+                
         print(f"Year {year}: Applied ceiling price compliance")
 
 # 6. Cost Calculations
