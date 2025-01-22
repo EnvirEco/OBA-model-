@@ -1108,7 +1108,37 @@ class obamodel:
         print(f"  Cost: ${cost:.2f}")
         print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
 
-
+    def execute_trades(self, year):
+        buyers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0]
+        sellers = self.facilities_data[self.facilities_data[f'Allowance Surplus/Deficit_{year}'] > 0]
+        total_trade_volume = 0
+    
+        if buyers.empty or sellers.empty:
+            print(f"No valid buyers or sellers for year {year}. Skipping trades.")
+            return
+    
+        for _, buyer in buyers.iterrows():
+            for _, seller in sellers.iterrows():
+                if buyer[f'Allowance Surplus/Deficit_{year}'] >= 0 or seller[f'Allowance Surplus/Deficit_{year}'] <= 0:
+                    continue
+    
+                trade_volume = min(abs(buyer[f'Allowance Surplus/Deficit_{year}']), seller[f'Allowance Surplus/Deficit_{year}'])
+                trade_cost = trade_volume * self.market_price
+    
+                self.facilities_data.loc[buyer.name, f'Allowance Surplus/Deficit_{year}'] += trade_volume
+                self.facilities_data.loc[buyer.name, f'Trade Cost_{year}'] += trade_cost
+                self.facilities_data.loc[buyer.name, f'Trade Volume_{year}'] += trade_volume
+    
+                self.facilities_data.loc[seller.name, f'Allowance Surplus/Deficit_{year}'] -= trade_volume
+                self.facilities_data.loc[seller.name, f'Trade Cost_{year}'] -= trade_cost
+                self.facilities_data.loc[seller.name, f'Trade Volume_{year}'] -= trade_volume
+    
+                total_trade_volume += trade_volume
+    
+                if buyer[f'Allowance Surplus/Deficit_{year}'] >= 0:
+                    break
+        print(f"Total trade volume for year {year}: {total_trade_volume}")
+    
     def _initialize_banking_columns(self) -> None:
         """Initialize columns needed for banking."""
         # Add banking columns for each year
