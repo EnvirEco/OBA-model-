@@ -82,8 +82,8 @@ def run_scenario_analysis():
                 scenario_params=scenario
             )
             
-            # Run the model
-            market_summary, sector_summary, facility_results = model.run_model()
+            # Run the model - now unpacking all 5 return values
+            market_summary, sector_summary, facility_results, compliance_reports, market_reports = model.run_model()
             
             # Save scenario results
             scenario_name = scenario['name'].replace(' ', '_').lower()
@@ -91,22 +91,31 @@ def run_scenario_analysis():
             market_file = results_dir / f"market_summary_{scenario_name}.csv"
             sector_file = results_dir / f"sector_summary_{scenario_name}.csv"
             facility_file = results_dir / f"facility_results_{scenario_name}.csv"
+            compliance_file = results_dir / f"compliance_reports_{scenario_name}.csv"
+            market_report_file = results_dir / f"market_reports_{scenario_name}.csv"
             
+            # Save all results
             market_summary.to_csv(market_file, index=False)
             sector_summary.to_csv(sector_file, index=False)
             facility_results.to_csv(facility_file, index=False)
+            compliance_reports.to_csv(compliance_file, index=False)
+            market_reports.to_csv(market_report_file, index=False)
             
             print(f"Results saved for scenario {scenario['name']}:")
             print(f"  Market summary: {market_file}")
             print(f"  Sector summary: {sector_file}")
             print(f"  Facility results: {facility_file}")
+            print(f"  Compliance reports: {compliance_file}")
+            print(f"  Market reports: {market_report_file}")
             
             # Store results for comparison
             scenario_results.append({
                 'name': scenario['name'],
                 'market_summary': market_summary,
                 'sector_summary': sector_summary,
-                'facility_results': facility_results
+                'facility_results': facility_results,
+                'compliance_reports': compliance_reports,
+                'market_reports': market_reports
             })
             
         except Exception as e:
@@ -116,14 +125,16 @@ def run_scenario_analysis():
     # Create comparison analysis if we have results
     if scenario_results:
         try:
-            # Create scenario comparison
+            # Create scenario comparison with additional metrics
             comparison_df = pd.DataFrame([
                 {
                     'Scenario': result['name'],
                     'Total Emissions': result['market_summary']['Total_Emissions'].sum(),
                     'Total Abatement': result['market_summary']['Total_Abatement'].sum(),
                     'Average Price': result['market_summary']['Market_Price'].mean(),
-                    'Total Cost': result['market_summary']['Total_Net_Cost'].sum()
+                    'Total Cost': result['market_summary']['Total_Net_Cost'].sum(),
+                    'Compliance Rate': (result['compliance_reports']['Compliance Status'] == 'Compliant').mean() 
+                        if 'Compliance Status' in result['compliance_reports'].columns else None
                 }
                 for result in scenario_results
             ])
