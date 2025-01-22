@@ -1,80 +1,156 @@
 import pandas as pd
+import numpy as np
 import os
-from obamodel import obamodel  # Import the updated obamodel class
+from pathlib import Path
+from obamodel import obamodel
 
-# Set the working directory
-os.chdir(r"C:\Users\user\AppData\Local\Programs\Python\Python313\OBA_test")
-print("Current working directory:", os.getcwd())
-
-# Load input data
-facilities_data = pd.read_csv("facilities_data.csv")
-abatement_cost_curve = pd.read_csv("abatement_cost_curve.csv")
-
-# Initialize the emissions trading model
-start_year = 2025
-model = obamodel(facilities_data, abatement_cost_curve, start_year)  # Include start_year
-
-# Run the emissions trading model
-def run_trading_model(start_year=2025, end_year=2035):
-    print("Running the model...")
-
-    # Execute the model's main functionality for multi-year dynamics
+def run_scenario_analysis():
+    """Run all scenarios and save results."""
+    print("Starting scenario analysis...")
+    
+    # Get the base directory - adjust this to your setup
+    base_dir = Path(r"C:\Users\user\AppData\Local\Programs\Python\Python313\OBA_test")
+    print(f"Base directory: {base_dir}")
+    
+    # Define file paths
+    scenario_file = base_dir / "data" / "input" / "scenarios" / "scenarios.csv"
+    facilities_file = base_dir / "data" / "input" / "facilities" / "facilities_data.csv"
+    abatement_file = base_dir / "data" / "input" / "facilities" / "abatement_cost_curve.csv"
+    
+    print("\nAttempting to load files from:")
+    print(f"Scenarios: {scenario_file}")
+    print(f"Facilities: {facilities_file}")
+    print(f"Abatement: {abatement_file}")
+    
+    # Verify file existence
+    for file_path in [scenario_file, facilities_file, abatement_file]:
+        if not file_path.exists():
+            print(f"ERROR: File not found: {file_path}")
+            return None
+        if not os.access(file_path, os.R_OK):
+            print(f"ERROR: No permission to read file: {file_path}")
+            return None
+    
+    # Load input data
     try:
-        results = model.run_model(start_year, end_year)
-    except KeyError as e:
-        print(f"KeyError encountered during model run: {e}")
-        return
+        facilities_data = pd.read_csv(facilities_file)
+        print(f"\nFacilities data loaded: {len(facilities_data)} rows")
+        print(f"Facilities columns: {', '.join(facilities_data.columns)}")
     except Exception as e:
-        print(f"Unexpected error during model run: {e}")
-        return
+        print(f"Error loading facilities data: {e}")
+        return None
+        
+    try:
+        abatement_cost_curve = pd.read_csv(abatement_file)
+        print(f"Abatement curves loaded: {len(abatement_cost_curve)} rows")
+        print(f"Abatement columns: {', '.join(abatement_cost_curve.columns)}")
+    except Exception as e:
+        print(f"Error loading abatement curves: {e}")
+        return None
+    
+    # Load scenarios
+    try:
+        print(f"\nAttempting to load scenarios from: {scenario_file}")
+        scenarios = obamodel.load_all_scenarios(str(scenario_file))
+        print(f"Successfully loaded {len(scenarios)} scenarios")
+    except Exception as e:
+        print(f"Error loading scenarios: {e}")
+        return None
+        
+    # Create results directory
+    results_dir = base_dir / "data" / "output" / "results"
+    try:
+        results_dir.mkdir(exist_ok=True, parents=True)
+    except Exception as e:
+        print(f"Error creating results directory: {e}")
+        return None
+    
+    # Run each scenario
+    scenario_results = []
+    start_year = 2025
+    end_year = 2030
+    
+    for scenario in scenarios:
+        print(f"\nRunning scenario: {scenario['name']}")
+        try:
+            # Initialize model for this scenario
+            model = obamodel(
+                facilities_data=facilities_data,
+                abatement_cost_curve=abatement_cost_curve,
+                start_year=start_year,
+                end_year=end_year,
+                scenario_params=scenario
+            )
+            
+            # Run the model - now unpacking all 5 return values
+            market_summary, sector_summary, facility_results, compliance_reports, market_reports = model.run_model()
+            
+            # Save scenario results
+            scenario_name = scenario['name'].replace(' ', '_').lower()
+            
+            market_file = results_dir / f"market_summary_{scenario_name}.csv"
+            sector_file = results_dir / f"sector_summary_{scenario_name}.csv"
+            facility_file = results_dir / f"facility_results_{scenario_name}.csv"
+            compliance_file = results_dir / f"compliance_reports_{scenario_name}.csv"
+            market_report_file = results_dir / f"market_reports_{scenario_name}.csv"
+            
+            # Save all results
+            market_summary.to_csv(market_file, index=False)
+            sector_summary.to_csv(sector_file, index=False)
+            facility_results.to_csv(facility_file, index=False)
+            compliance_reports.to_csv(compliance_file, index=False)
+            market_reports.to_csv(market_report_file, index=False)
+            
+            print(f"Results saved for scenario {scenario['name']}:")
+            print(f"  Market summary: {market_file}")
+            print(f"  Sector summary: {sector_file}")
+            print(f"  Facility results: {facility_file}")
+            print(f"  Compliance reports: {compliance_file}")
+            print(f"  Market reports: {market_report_file}")
+            
+            # Store results for comparison
+            scenario_results.append({
+                'name': scenario['name'],
+                'market_summary': market_summary,
+                'sector_summary': sector_summary,
+                'facility_results': facility_results,
+                'compliance_reports': compliance_reports,
+                'market_reports': market_reports
+            })
+            
+        except Exception as e:
+            print(f"Error running scenario {scenario['name']}: {str(e)}")
+            continue
+    
+    # Create comparison analysis if we have results
+    if scenario_results:
+        try:
+            # Create scenario comparison with additional metrics
+            comparison_df = pd.DataFrame([
+                {
+                    'Scenario': result['name'],
+                    'Total Emissions': result['market_summary']['Total_Emissions'].sum(),
+                    'Total Abatement': result['market_summary']['Total_Abatement'].sum(),
+                    'Average Price': result['market_summary']['Market_Price'].mean(),
+                    'Total Cost': result['market_summary']['Total_Net_Cost'].sum(),
+                    'Compliance Rate': (result['compliance_reports']['Compliance Status'] == 'Compliant').mean() 
+                        if 'Compliance Status' in result['compliance_reports'].columns else None
+                }
+                for result in scenario_results
+            ])
+            
+            comparison_file = results_dir / "scenario_comparison.csv"
+            comparison_df.to_csv(comparison_file, index=False)
+            print(f"\nScenario comparison saved to: {comparison_file}")
+            
+        except Exception as e:
+            print(f"Error creating scenario comparison: {str(e)}")
+    
+    return results_dir
 
-    if not results:  # Handle case where results are None or empty
-        print("No results were generated. Please check the model configuration and input data.")
-        return
-
-    # Initialize lists to collect yearly summaries for combined files
-    combined_market_results = []
-    combined_facility_results = []
-
-    # Process and save results for each year
-    for result in results:
-        year = result['Year']
-        market_summary_file = f"market_summary_{year}.csv"
-        facility_summary_file = f"facility_summary_{year}.csv"
-
-        # Save market-level summaries to individual files
-        pd.DataFrame([result]).to_csv(market_summary_file, index=False)
-        print(f"Year {year} Market-level summary saved to {market_summary_file}")
-
-        # Extract year-specific facility data
-        facility_summary = model.facilities_data[[
-            'Facility ID', f'Emissions_{year}', f'Benchmark_{year}', f'Allocations_{year}',
-            f'Allowance Surplus/Deficit_{year}', f'Abatement Cost_{year}',
-            f'Trade Cost_{year}', f'Total Cost_{year}', f'Profit_{year}',
-            f'Costs to Profits Ratio_{year}', f'Costs to Output Ratio_{year}',
-            f''Banked Allowances_{year}'  # Add Banked Allowances to the summary
-        ]].copy()
-
-        facility_summary["Year"] = year
-
-        # Save facility-level summaries for the year
-        facility_summary.to_csv(facility_summary_file, index=False)
-        print(f"Year {year} Facility-level summary saved to {facility_summary_file}")
-
-        # Append results to combined lists
-        combined_market_results.append(result)
-        combined_facility_results.append(facility_summary)
-
-    # Save combined market-level results to a single file
-    combined_market_file = "combined_market_summary.csv"
-    pd.DataFrame(combined_market_results).to_csv(combined_market_file, index=False)
-    print(f"Combined market-level summary saved to {combined_market_file}")
-
-    # Save combined facility-level results to a single file
-    combined_facility_file = "combined_facility_summary.csv"
-    pd.concat(combined_facility_results).to_csv(combined_facility_file, index=False)
-    print(f"Combined facility-level summary saved to {combined_facility_file}")
-
-# Execute the function
 if __name__ == "__main__":
-    run_trading_model()
+    output_dir = run_scenario_analysis()
+    if output_dir:
+        print(f"\nAnalysis complete. Results saved in: {output_dir}")
+    else:
+        print("\nAnalysis failed to complete")
