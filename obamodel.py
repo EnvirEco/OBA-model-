@@ -1420,6 +1420,8 @@ class obamodel:
                         break
                         
             return total_volume, total_cost
+        
+        return total_volume, total_cost  # Ensure a valid tuple is always returned
     
     def _get_facility_mac(self, facility_id: str, year: int) -> float:
         """Calculate facility's marginal abatement cost at current position."""
