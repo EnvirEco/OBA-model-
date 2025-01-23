@@ -424,13 +424,13 @@ class obamodel:
                 if self.validate_market_price():
                     trade_volume, trade_cost = self.trade_allowances(year)
                 
-                #. ceiling prie as backstop
+                # 8. Apply ceiling price compliance
                 self.apply_ceiling_price_compliance(year)  # Apply ceiling price compliance step
                 
-                # 8. Calculate costs
+                # 9. Calculate costs
                 self.calculate_costs(year)
                 
-                # 9. Generate reports for this year
+                # 10. Generate reports for this year
                 if hasattr(self, 'generate_market_report'):
                     market_report = self.generate_market_report(year)
                     market_reports.append(market_report)
@@ -439,7 +439,7 @@ class obamodel:
                     compliance_report = self.generate_compliance_report(year)
                     compliance_reports.append(compliance_report)
                 
-                # 10. Store results
+                # 11. Store results
                 market_summary.append(self._create_market_summary(year))
                 sector_summaries.append(self.create_sector_summary(year))
                 
@@ -462,7 +462,7 @@ class obamodel:
             # Return empty DataFrames in case of error
             return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), 
                     pd.DataFrame(), pd.DataFrame())
-
+        
     def validate_scenario_parameters(self, scenario_type: str, params: Dict) -> bool:
         """Validate parameters for any scenario type"""
         # Validate base parameters
@@ -879,7 +879,7 @@ class obamodel:
         print(f"Price increment: ${self.price_increment:.2f}")
         print(f"Calculated ceiling: ${ceiling:.2f}")
         
-        return ceiling 
+        return ceiling
 
     def determine_market_price(self, supply: float, demand: float, year: int) -> float:
         """Determine market price based on supply/demand and MAC curves."""
@@ -1401,9 +1401,9 @@ class obamodel:
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
-        
+    
         positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
-        
+    
         # Identify buyers (short positions) and sellers (long positions)
         buyers = self.facilities_data[positions < 0].copy()
         sellers = self.facilities_data[positions > 0].copy()
@@ -1423,114 +1423,57 @@ class obamodel:
         current_ceiling = self.calculate_price_ceiling(year)
         print(f"Current ceiling price: ${current_ceiling:.2f}")
     
-        # When below ceiling price, execute trades based on market price
-        if self.market_price < current_ceiling:
-            print("\nExecuting trades at market price (below ceiling)")
-            # Sort by volume to prioritize larger trades
-            buyers = buyers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=True)
-            sellers = sellers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=False)
+        # Allow trades at or below the ceiling price
+        print("\nExecuting trades at market price (at or below ceiling)")
+        buyers = buyers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=True)
+        sellers = sellers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=False)
     
-            for buyer_idx, buyer in buyers.iterrows():
-                buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
-                if buyer_demand < MIN_TRADE:
+        for buyer_idx, buyer in buyers.iterrows():
+            buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
+            if buyer_demand < MIN_TRADE:
+                continue
+    
+            print(f"\nBuyer {buyer['Facility ID']} demand: {buyer_demand:.4f}")
+    
+            for seller_idx, seller in sellers.iterrows():
+                seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
+                if seller_supply < MIN_TRADE:
                     continue
     
-                print(f"\nBuyer {buyer['Facility ID']} demand: {buyer_demand:.4f}")
+                print(f"Seller {seller['Facility ID']} supply: {seller_supply:.4f}")
     
-                for seller_idx, seller in sellers.iterrows():
-                    seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
-                    if seller_supply < MIN_TRADE:
-                        continue
-    
-                    print(f"Seller {seller['Facility ID']} supply: {seller_supply:.4f}")
-    
-                    # Calculate trade volume
-                    volume = min(buyer_demand, seller_supply)
-                    if volume < MIN_TRADE:
-                        continue
-    
-                    cost = volume * self.market_price
-    
-                    print(f"\nExecuting Trade:")
-                    print(f"Volume: {volume:.4f}")
-                    print(f"Price: ${self.market_price:.2f}")
-                    print(f"Cost: ${cost:.2f}")
-    
-                    # Update buyer
-                    self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += volume
-                    self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[buyer_idx, f'Allowance Purchase Cost_{year}'] += cost
-                    self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += cost
-    
-                    # Update seller
-                    self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-                    self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
-    
-                    total_volume += volume
-                    total_cost += cost
-    
-                    # Update remaining demand and supply
-                    buyer_demand -= volume
-                    sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-    
-                    if buyer_demand < MIN_TRADE:
-                        break
-        else:
-            # At ceiling price, consider MACs
-            print("\nAt ceiling price - using MAC-based trading")
-            # Sort buyers by highest MAC (most willing to buy)
-            buyers['MAC'] = buyers.apply(lambda x: self._get_facility_mac(x['Facility ID'], year), axis=1)
-            buyers = buyers.sort_values('MAC', ascending=False)
-    
-            # Sort sellers by lowest MAC (most willing to sell)
-            sellers['MAC'] = sellers.apply(lambda x: self._get_facility_mac(x['Facility ID'], year), axis=1)
-            sellers = sellers.sort_values('MAC')
-    
-            print(f"Average Buyer MAC: ${buyers['MAC'].mean():.2f}")
-            print(f"Average Seller MAC: ${sellers['MAC'].mean():.2f}")
-    
-            for _, buyer in buyers.iterrows():
-                buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
-                if buyer_demand < MIN_TRADE:
+                # Calculate trade volume
+                volume = min(buyer_demand, seller_supply)
+                if volume < MIN_TRADE:
                     continue
     
-                buyer_mac = buyer['MAC']
-                print(f"\nBuyer {buyer['Facility ID']} MAC: ${buyer_mac:.2f}")
+                cost = volume * self.market_price
     
-                for seller_idx, seller in sellers.iterrows():
-                    seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
-                    if seller_supply < MIN_TRADE:
-                        continue
+                print(f"\nExecuting Trade:")
+                print(f"Volume: {volume:.4f}")
+                print(f"Price: ${self.market_price:.2f}")
+                print(f"Cost: ${cost:.2f}")
     
-                    seller_mac = seller['MAC']
-                    print(f"Seller {seller['Facility ID']} MAC: ${seller_mac:.2f}")
+                # Update buyer
+                self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += volume
+                self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += volume
+                self.facilities_data.at[buyer_idx, f'Allowance Purchase Cost_{year}'] += cost
+                self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += cost
     
-                    # Only trade if economically beneficial at ceiling price
-                    if seller_mac >= buyer_mac:
-                        print("Trade not economic at ceiling price - skipping")
-                        continue
+                # Update seller
+                self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
+                self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
+                self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
     
-                    # Execute trade at ceiling price
-                    volume = min(buyer_demand, seller_supply)
-                    cost = volume * current_ceiling
+                total_volume += volume
+                total_cost += cost
     
-                    # Update positions and record trade
-                    self.facilities_data.at[buyer.name, f'Allowance Surplus/Deficit_{year}'] += volume
-                    self.facilities_data.at[buyer.name, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}'] += cost
-                    self.facilities_data.at[buyer.name, f'Trade Cost_{year}'] += cost
+                # Update remaining demand and supply
+                buyer_demand -= volume
+                sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
     
-                    self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-                    self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
-    
-                    total_volume += volume
-                    total_cost += cost
-    
-                    buyer_demand -= volume
-                    if buyer_demand < MIN_TRADE:
-                        break
+                if buyer_demand < MIN_TRADE:
+                    break
     
         # Verify final positions
         final_positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
@@ -1573,9 +1516,10 @@ class obamodel:
                 # Calculate payment required to cover deficit at ceiling price
                 payment = abs(surplus_deficit) * ceiling_price
                 self.facilities_data.at[index, f'Ceiling Price Payment_{year}'] = payment
-                self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] = 0  # Clear deficit
-                
-        print(f"Year {year}: Applied ceiling price compliance")
+                # Mark deficit for compliance but do not clear it immediately
+                self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] = payment / ceiling_price  # Adjusted deficit
+    
+        print(f"Year {year}: Applied ceiling price compliance")  
 
 # 6. Cost Calculations
     def calculate_costs(self, year: int) -> None:
