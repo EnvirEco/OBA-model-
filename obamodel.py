@@ -320,36 +320,36 @@ class obamodel:
             "Tonnes Abated", "Allowance Purchase Cost", "Allowance Sales Revenue",
             "Compliance Cost", "Cost to Profit Ratio", "Cost to Output Ratio"
         ]
-        
+    
         # Add MSR-specific metrics if MSR is active
         if self.msr_active:
             metrics.extend([
                 "MSR_Adjustment",
                 "MSR_Active"
             ])
-        
+    
         # Create and verify year-specific columns
         year_cols = []
         for year in range(self.start_year, self.end_year + 1):
             for metric in metrics:
                 col_name = f"{metric}_{year}"
                 year_cols.append(col_name)
-                
+    
         # Create new columns with explicit zeros
         new_cols = pd.DataFrame(
             data=0.0,
             index=self.facilities_data.index,
             columns=year_cols
         )
-        
+    
         # Verify all required columns exist before concatenating
         missing_cols = set(year_cols) - set(new_cols.columns)
         if missing_cols:
             raise ValueError(f"Failed to create columns: {missing_cols}")
-        
+    
         # Concat with existing data
         self.facilities_data = pd.concat([self.facilities_data, new_cols], axis=1)
-        
+    
         # Verify critical columns after concatenation
         for year in range(self.start_year, self.end_year + 1):
             critical_cols = [
@@ -361,7 +361,7 @@ class obamodel:
             missing = [col for col in critical_cols if col not in self.facilities_data.columns]
             if missing:
                 raise ValueError(f"Critical columns missing after initialization: {missing}")
-        
+    
         # Calculate Baseline Allocations if needed
         if 'Baseline Allocations' not in self.facilities_data.columns:
             self.facilities_data['Baseline Allocations'] = (
@@ -375,13 +375,12 @@ class obamodel:
                 self.facilities_data['Baseline Output'] * 
                 self.facilities_data['Baseline Profit Rate']
             )
-        
+    
         # Print verification of critical columns
         print("\nInitialized columns verification:")
         print(f"Total columns created: {len(year_cols)}")
         print(f"First year columns present: {all(f'{m}_{self.start_year}' in self.facilities_data.columns for m in metrics)}")
         print(f"Last year columns present: {all(f'{m}_{self.end_year}' in self.facilities_data.columns for m in metrics)}")
-        
 
 # 3. Core Model Execution Methods
     def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
