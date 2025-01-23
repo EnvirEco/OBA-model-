@@ -1911,9 +1911,15 @@ class obamodel:
         Generate a market report showing price, trading, and market balance information.
         Added ceiling price compliance calculations.
         """
-        print(f"\n=== Market Report for Year {year} ===")
-        
-        # Calculate key market metrics
+        # Calculate market positions only once
+        positions = (
+            self.facilities_data[f'Allocations_{year}'] - 
+            self.facilities_data[f'Emissions_{year}']
+        )
+        total_short = abs(positions[positions < 0].sum())
+        total_long = positions[positions > 0].sum()
+    
+        # Calculate other metrics
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
         total_abatement = self.facilities_data[f'Tonnes Abated_{year}'].sum()
@@ -1921,15 +1927,10 @@ class obamodel:
         total_banked = self.facilities_data[f'Banking_Decision_{year}'].sum()
         total_used_banked = self.facilities_data[f'Used_Banked_Allowances_{year}'].sum()
         
-        # Calculate market positions
-        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
-        total_short = abs(positions[positions < 0].sum())
-        total_long = positions[positions > 0].sum()
-        
         # Calculate ceiling price metrics
         current_ceiling = self.calculate_price_ceiling(year)
         price_to_ceiling_ratio = self.market_price / current_ceiling if current_ceiling > 0 else 0
-        ceiling_volume = abs(positions[positions < 0].sum())  # Total short position
+        ceiling_volume = total_short  # Use already calculated short position
         ceiling_value = ceiling_volume * current_ceiling
         
         # Create market report dictionary
