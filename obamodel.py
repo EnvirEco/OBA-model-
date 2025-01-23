@@ -1065,18 +1065,8 @@ class obamodel:
                 # Calculate economic abatement at market price
                 economic_quantity = (self.market_price - intercept) / slope
                 
-                # Only abate up to 80% of deficit to leave room for trading
-                if initial_gap > 0:  # Facility is short
-                    target_abatement = min(
-                        economic_quantity,
-                        max_reduction,
-                        initial_gap * 0.8  # Leave 20% for potential trading
-                    )
-                else:  # Facility is long
-                    target_abatement = min(
-                        economic_quantity,
-                        max_reduction
-                    )
+                # Allow abatement beyond deficit when profitable
+                target_abatement = min(economic_quantity, max_reduction)
                 
                 if target_abatement > 0:
                     abatement_cost = (
@@ -1088,7 +1078,12 @@ class obamodel:
                     self.facilities_data.at[idx, f'Tonnes Abated_{year}'] = target_abatement
                     self.facilities_data.at[idx, f'Abatement Cost_{year}'] = abatement_cost
                     self.facilities_data.at[idx, f'Emissions_{year}'] -= target_abatement
-            
+                    
+                    # Create surplus if abatement exceeds deficit
+                    surplus = target_abatement - initial_gap
+                    if surplus > 0:
+                        self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += surplus
+    
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """
         Apply abatement results to the facility's data.
@@ -1412,6 +1407,10 @@ class obamodel:
                     
                     self.facilities_data.at[buyer_idx, f'Allowance Purchase Cost_{year}'] += cost
                     self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
+    
+                    # Record trade cost
+                    self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += cost
+                    self.facilities_data.at[seller_idx, f'Trade Cost_{year}'] -= cost
                     
                     total_volume += volume
                     total_cost += cost
@@ -1443,29 +1442,29 @@ class obamodel:
             return float('inf')  # Return high cost to discourage trading
             
     def apply_ceiling_price_compliance(self, year: int) -> None:
-        """Apply ceiling price compliance for remaining deficits."""
-        ceiling_price = self.calculate_price_ceiling(year)
+        # Initialize all columns at once
+        new_columns = {
+            f'Ceiling Price Payment_{year}': 0.0,
+            f'Base Profit_{year}': 0.0,
+            f'Trading Profit_{year}': 0.0,
+            f'Total Profit_{year}': 0.0,
+            f'Profit Margin_{year}': 0.0
+        }
         
-        # Define which facilities are still short
+        # Add all columns at once
+        for col, default_value in new_columns.items():
+            if col not in self.facilities_data.columns:
+                self.facilities_data[col] = default_value
+                
+        ceiling_price = self.calculate_price_ceiling(year)
         short_facilities = self.facilities_data[f'Allowance Surplus/Deficit_{year}'] < 0
         
-        if not any(short_facilities):
-            return
-            
-        print(f"Facilities using ceiling price compliance: {sum(short_facilities)}")
-        
-        # Apply ceiling price compliance
+        # Update values for facilities using ceiling price
         for idx in self.facilities_data[short_facilities].index:
             deficit = abs(self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'])
             payment = deficit * ceiling_price
-            
-            # Initialize ceiling price payment column if needed
-            if f'Ceiling Price Payment_{year}' not in self.facilities_data.columns:
-                self.facilities_data[f'Ceiling Price Payment_{year}'] = 0.0
-                
-            # Record compliance
             self.facilities_data.at[idx, f'Ceiling Price Payment_{year}'] = payment
-            self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] = 0   
+            self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] = 0  
 
 # 6. Cost Calculations
     def calculate_costs(self, year: int) -> None:
@@ -1687,6 +1686,11 @@ class obamodel:
             return 0.0
     
     def _create_market_summary(self, year: int) -> Dict:
+        # Get positions first
+        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        total_short = abs(positions[positions < 0].sum())
+        total_long = positions[positions > 0].sum()
+        
         """Create system-wide market summary with enhanced abatement metrics."""
         summary = {
             'Year': year,
@@ -1694,7 +1698,9 @@ class obamodel:
             'Total_Allocations': float(self.facilities_data[f'Allocations_{year}'].sum()),
             'Total_Emissions': float(self.facilities_data[f'Emissions_{year}'].sum()),
             'Total_Abatement': float(self.facilities_data[f'Tonnes Abated_{year}'].sum()),
-            'Total_Trade_Volume': float(self.facilities_data[f'Trade Volume_{year}'].sum()/2),
+            'Total_Short_Position': total_short,
+            'Total_Long_Position': total_long,
+            'Net_Position': total_long - total_short,'Total_Trade_Volume': float(self.facilities_data[f'Trade Volume_{year}'].sum()/2),
             'Total_Trade_Cost': float(self.facilities_data[f'Trade Cost_{year}'].sum()/2),
             'Total_Abatement_Cost': float(self.facilities_data[f'Abatement Cost_{year}'].sum()),
             'Total_Compliance_Cost': float(self.facilities_data[f'Compliance Cost_{year}'].sum()),
