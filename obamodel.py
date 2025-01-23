@@ -1509,17 +1509,18 @@ class obamodel:
             return float('inf')  # Return high cost to discourage trading
             
     def apply_ceiling_price_compliance(self, year):
+        """Apply ceiling price compliance when market price hits or exceeds ceiling."""
         ceiling_price = self.calculate_price_ceiling(year)
-        for index, row in self.facilities_data.iterrows():
-            surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
-            if surplus_deficit < 0:
-                # Calculate payment required to cover deficit at ceiling price
-                payment = abs(surplus_deficit) * ceiling_price
-                self.facilities_data.at[index, f'Ceiling Price Payment_{year}'] = payment
-                # Mark deficit for compliance but do not clear it immediately
-                self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] = payment / ceiling_price  # Adjusted deficit
-    
-        print(f"Year {year}: Applied ceiling price compliance")  
+        
+        if self.market_price >= ceiling_price:  # Changed condition
+            for index, row in self.facilities_data.iterrows():
+                surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
+                if surplus_deficit < 0:
+                    payment = abs(surplus_deficit) * ceiling_price
+                    self.facilities_data.at[index, f'Ceiling Price Payment_{year}'] = payment
+                    self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] = 0
+        else:
+            self.facilities_data[f'Ceiling Price Payment_{year}'] = 0  
 
 # 6. Cost Calculations
     def calculate_costs(self, year: int) -> None:
@@ -1911,13 +1912,21 @@ class obamodel:
         Generate a market report showing price, trading, and market balance information.
         Added ceiling price compliance calculations.
         """
-        # Calculate market positions only once
+        # Calculate net position first
         positions = (
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
-        total_short = abs(positions[positions < 0].sum())
-        total_long = positions[positions > 0].sum()
+        net_position = positions.sum()
+        
+        # If net negative, only show short position
+        if net_position < 0:
+            total_short = abs(net_position)
+            total_long = 0
+        # If net positive, only show long position    
+        else:
+            total_short = 0
+            total_long = net_position
     
         # Calculate other metrics
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
@@ -1930,9 +1939,13 @@ class obamodel:
         # Calculate ceiling price metrics
         current_ceiling = self.calculate_price_ceiling(year)
         price_to_ceiling_ratio = self.market_price / current_ceiling if current_ceiling > 0 else 0
-        ceiling_volume = total_short  # Use already calculated short position
-        ceiling_value = ceiling_volume * current_ceiling
-        
+        if self.market_price < current_ceiling:
+            ceiling_volume = 0
+            ceiling_value = 0
+        else:
+            ceiling_volume = abs(positions[positions < 0].sum())  # Total short position
+            ceiling_value = ceiling_volume * current_ceiling
+    
         # Create market report dictionary
         market_data = {
             'Year': year,
@@ -1945,12 +1958,12 @@ class obamodel:
             'Total_Short_Position': total_short,
             'Total_Long_Position': total_long,
             'Total_Trade_Volume': total_trade_volume,
-            'Trading_Turnover_Rate': total_trade_volume/total_allocations if total_allocations > 0 else 0,
+            'Trading_Turnover_Rate': total_trade_volume / total_allocations if total_allocations > 0 else 0,
             'Total_Abatement': total_abatement,
-            'Abatement_Rate': total_abatement/total_emissions if total_emissions > 0 else 0,
+            'Abatement_Rate': total_abatement / total_emissions if total_emissions > 0 else 0,
             'Newly_Banked_Allowances': total_banked,
             'Used_Banked_Allowances': total_used_banked,
-            'Banking_Rate': total_banked/total_allocations if total_allocations > 0 else 0,
+            'Banking_Rate': total_banked / total_allocations if total_allocations > 0 else 0,
             'Ceiling_Price_Volume': ceiling_volume,
             'Ceiling_Price_Value': ceiling_value
         }
