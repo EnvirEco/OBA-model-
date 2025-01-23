@@ -1075,6 +1075,13 @@ class obamodel:
             intercept = float(curve['Intercept'])
             max_reduction = float(curve['Max Reduction (MTCO2e)'])
             
+            # Calculate cumulative abatement and adjust max reduction
+            cumulative_abatement = sum(
+                facility.get(f'Tonnes Abated_{prev_year}', 0) 
+                for prev_year in range(self.start_year, year)
+            )
+            adjusted_max_reduction = max(0, max_reduction - cumulative_abatement)
+            
             if self.market_price > intercept and slope > 0:
                 # Base economic abatement
                 economic_quantity = (self.market_price - intercept) / slope
@@ -1085,14 +1092,14 @@ class obamodel:
                     # Consider additional abatement for trading
                     if self.market_price > (intercept + slope * economic_quantity):
                         trading_potential = min(
-                            max_reduction - economic_quantity,
+                            adjusted_max_reduction - economic_quantity,
                             -initial_gap * 0.5  # Use up to 50% of surplus for additional abatement
                         )
                 
                 # Calculate target abatement including trading consideration
                 target_abatement = min(
                     economic_quantity + trading_potential,
-                    max_reduction,
+                    adjusted_max_reduction,
                     current_emissions,
                     # Ensure some facilities generate surplus for trading
                     current_emissions + max(-initial_gap, balance_share * 1.2)  # Allow 20% extra
@@ -1122,7 +1129,7 @@ class obamodel:
         print(f"Average Cost per Tonne: ${(total_cost/total_abatement if total_abatement > 0 else 0):.2f}")
         print(f"\nPost-Abatement Positions:")
         print(f"Total Short: {total_short:.2f}")
-        print(f"Total Long: {total_long:.2f}") 
+        print(f"Total Long: {total_long:.2f}")
             
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """
