@@ -118,9 +118,9 @@ class obamodel:
         self.end_year = end_year
         
         # Store scenario parameters
-        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
-        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
-        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.05)
+        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.00)
+        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.00)
+        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.00)
         
         # MSR parameters
         self.msr_active = scenario_params.get("msr_active", False)
@@ -600,88 +600,64 @@ class obamodel:
 
 # 2. Dynamic Value Calculations
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate base values with explicit emissions verification."""
-        print(f"\n=== Calculating Values for Year {year} ===")
-        
-        if year == self.start_year:
-            # First period - use baseline values directly
-            print("\nSetting First Period Values...")
-            print("Before Setting:")
-            before_emissions = self.facilities_data[f'Emissions_{year}'].sum() if f'Emissions_{year}' in self.facilities_data.columns else 0
-            print(f"Total Emissions Before: {before_emissions:.4f}")
-            print(f"Baseline Emissions: {self.facilities_data['Baseline Emissions'].sum():.4f}")
-            
-            # Set values
-            self.facilities_data[f'Output_{year}'] = self.facilities_data['Baseline Output']
-            self.facilities_data[f'Emissions_{year}'] = self.facilities_data['Baseline Emissions']
-            
-            # Verify
-            print("\nAfter Setting:")
-            print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
-            print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
-            
-            # Sample verification
-            print("\nSample Facility Verification:")
-            sample = self.facilities_data.iloc[0]
-            print(f"Facility: {sample['Facility ID']}")
-            print(f"Baseline Emissions: {sample['Baseline Emissions']:.4f}")
-            print(f"Current Emissions: {sample[f'Emissions_{year}']:.4f}")
-            
-            # Full verification
-            discrepancies = self.facilities_data[
-                abs(self.facilities_data[f'Emissions_{year}'] - 
-                    self.facilities_data['Baseline Emissions']) > 0.0001
-            ]
-            if not discrepancies.empty:
-                print("\nWARNING: Found emissions discrepancies:")
-                for _, facility in discrepancies.iterrows():
-                    print(f"Facility {facility['Facility ID']}:")
-                    print(f"Baseline: {facility['Baseline Emissions']:.4f}")
-                    print(f"Current: {facility[f'Emissions_{year}']:.4f}")
-        else:
-            # Subsequent years - apply growth
-            years_elapsed = year - self.start_year
-            growth_factor = (1 + self.emissions_growth_rate) ** years_elapsed
-            
-            print(f"\nCalculating Year {year} Emissions:")
-            print(f"Years Elapsed: {years_elapsed}")
-            print(f"Growth Factor: {growth_factor:.4f}")
-            
-            self.facilities_data[f'Output_{year}'] = (
-                self.facilities_data['Baseline Output'] *
-                (1 + self.output_growth_rate) ** years_elapsed
-            )
-            
-            self.facilities_data[f'Emissions_{year}'] = (
-                self.facilities_data['Baseline Emissions'] * growth_factor
-            )
-        
-        # Calculate benchmarks
-        years_of_ratchet = year - (self.start_year - 1)
-        ratchet_factor = (1 - self.benchmark_ratchet_rate) ** years_of_ratchet
-        
-        self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] * ratchet_factor
-        )
-        
-        # Calculate allocations
-        self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * 
-            self.facilities_data[f'Benchmark_{year}']
-        )
-        
-        # Calculate initial positions
-        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
-            self.facilities_data[f'Allocations_{year}'] - 
-            self.facilities_data[f'Emissions_{year}']
-        )
-        
-        # Print final verification
-        print("\nFinal Values:")
-        print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
-        print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
-        print(f"Total Allocations: {self.facilities_data[f'Allocations_{year}'].sum():.4f}")
-        print(f"Net Position: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum():.4f}")
+       """Calculate base values with growth rates and abatement."""
+       print(f"\n=== Calculating Values for Year {year} ===")
+       
+       if year == self.start_year:
+           # First period - use baseline values
+           self.facilities_data[f'Output_{year}'] = self.facilities_data['Baseline Output']
+           self.facilities_data[f'Emissions_{year}'] = self.facilities_data['Baseline Emissions']
+           
+           print("\nFirst Period Values:")
+           print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
+           print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
+           
+       else:
+           # Subsequent years
+           years_elapsed = year - self.start_year
+           
+           # Only apply growth if rates are non-zero
+           output_factor = (1 + self.output_growth_rate) ** years_elapsed if self.output_growth_rate != 0 else 1
+           emissions_factor = (1 + self.emissions_growth_rate) ** years_elapsed if self.emissions_growth_rate != 0 else 1
+           
+           print(f"\nYear {year} Growth Factors:")
+           print(f"Output Growth: {output_factor:.4f}")
+           print(f"Emissions Growth: {emissions_factor:.4f}")
+           
+           # Apply growth factors
+           self.facilities_data[f'Output_{year}'] = (
+               self.facilities_data['Baseline Output'] * output_factor
+           )
+           
+           # Calculate emissions with growth and subtract previous year's abatement
+           base_emissions = self.facilities_data['Baseline Emissions'] * emissions_factor
+           prev_abatement = self.facilities_data[f'Tonnes Abated_{year-1}'].fillna(0)
+           self.facilities_data[f'Emissions_{year}'] = base_emissions - prev_abatement
+       
+       # Calculate benchmarks with ratchet
+       years_of_ratchet = year - (self.start_year - 1)
+       ratchet_factor = (1 - self.benchmark_ratchet_rate) ** years_of_ratchet if self.benchmark_ratchet_rate != 0 else 1
+       
+       self.facilities_data[f'Benchmark_{year}'] = (
+           self.facilities_data['Baseline Benchmark'] * ratchet_factor
+       )
+       
+       # Calculate allocations and positions
+       self.facilities_data[f'Allocations_{year}'] = (
+           self.facilities_data[f'Output_{year}'] * 
+           self.facilities_data[f'Benchmark_{year}']
+       )
+       
+       self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
+           self.facilities_data[f'Allocations_{year}'] - 
+           self.facilities_data[f'Emissions_{year}']
+       )
+       
+       print("\nFinal Values:")
+       print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
+       print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
+       print(f"Total Allocations: {self.facilities_data[f'Allocations_{year}'].sum():.4f}")
+       print(f"Net Position: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum():.4f}")
     
     def update_surplus_deficit(self, year: int) -> None:
         """Update allowance surplus/deficit positions after trading."""
@@ -1380,6 +1356,9 @@ class obamodel:
         """Execute trades and return trading metrics."""
         print(f"\n=== TRADE EXECUTION - Year {year} ===")
         print(f"Market Price: ${self.market_price:.2f}")
+        
+        if self.market_price > self.calculate_price_ceiling(year):
+            self.market_price = self.calculate_price_ceiling(year)
     
         if not self.validate_market_price():
             print("ERROR: Invalid market price, cannot execute trades")
