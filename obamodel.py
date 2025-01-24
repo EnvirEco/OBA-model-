@@ -776,8 +776,6 @@ class obamodel:
         
         return total_supply, total_demand
 
-
-   
     def analyze_market_stability(self, year: int) -> None:
         """Analyze market stability with sector-specific reporting."""
         print(f"\n=== Market Stability Analysis Year {year} ===")
