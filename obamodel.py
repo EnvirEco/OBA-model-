@@ -1131,33 +1131,18 @@ class obamodel:
             self.facilities_data[f'Used_Banked_Allowances_{year}'] = 0.0
 
     def calculate_banking_incentive(self, current_year: int, facility_id: str) -> float:
-        """
-        Calculate banking incentive based on price ceiling trajectory.
-        Returns value between 0 and 1 indicating banking attractiveness.
-        """
-        # Get current market conditions
         current_price = self.market_price
         current_ceiling = self.calculate_price_ceiling(current_year)
-        
-        # Look ahead one year
         next_year_ceiling = self.calculate_price_ceiling(current_year + 1)
         
-        # Calculate price gaps
-        ceiling_increase = next_year_ceiling - current_ceiling
-        current_headroom = current_ceiling - current_price
+        # Price closer to ceiling increases incentive
+        price_ratio = current_price / current_ceiling
+        # Higher ceiling growth increases incentive  
+        ceiling_growth = (next_year_ceiling - current_ceiling) / current_ceiling
         
-        # Banking is more attractive when:
-        # 1. Current price is well below ceiling (more room for appreciation)
-        # 2. Ceiling will increase significantly next year
-        # Normalize to 0-1 scale
-        price_gap_ratio = current_headroom / current_ceiling
-        ceiling_growth_ratio = ceiling_increase / current_ceiling
+        banking_incentive = 0.7 * price_ratio + 0.3 * ceiling_growth
         
-        # Combine factors (equal weights)
-        banking_incentive = 0.5 * price_gap_ratio + 0.5 * ceiling_growth_ratio
-        
-        # Cap between 0 and 1
-        return max(0.0, min(1.0, banking_incentive))
+        return max(0.0, min(1.0, banking_incentive)) 
 
     def make_banking_decision(self, year: int) -> None:
         """
