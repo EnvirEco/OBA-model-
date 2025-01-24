@@ -967,10 +967,6 @@ class obamodel:
         if self.market_price < self.floor_price:
             print(f"ERROR: Market price ${self.market_price:.2f} below floor ${self.floor_price:.2f}")
             return False
-        current_ceiling = self.calculate_price_ceiling(self.start_year)  # Get current ceiling
-        if self.market_price > current_ceiling:
-            print(f"ERROR: Market price ${self.market_price:.2f} above ceiling ${current_ceiling:.2f}")
-            return False
         return True
       
     def _build_mac_curve(self, year: int) -> List[float]:
