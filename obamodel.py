@@ -854,108 +854,78 @@ class obamodel:
         print(f"Calculated ceiling: ${ceiling:.2f}")
         
         return ceiling
-
+        
     def determine_market_price(self, supply: float, demand: float, year: int) -> float:
         """Determine market price based on supply/demand and MAC curves."""
         print(f"\n=== Market Price Determination for Year {year} ===")
-        print(f"Supply: {supply:.2f}")
-        print(f"Demand: {demand:.2f}")
-        print(f"Current Base Ceiling: ${self.ceiling_price:.2f}")
-        print(f"Current Price Increment: ${self.price_increment:.2f}/year")
+        current_ceiling = self.calculate_price_ceiling(year)
+        STABILITY_THRESHOLD = 0.1
         
-        current_ceiling_price = self.calculate_price_ceiling(year)
+        net_position = supply - demand
+        position_ratio = abs(net_position) / max(supply, demand)
     
+        if position_ratio < STABILITY_THRESHOLD:
+            return min(self.market_price, current_ceiling)
+            
         if supply >= demand:
             min_sell_price = float('inf')
             for _, facility in self.facilities_data.iterrows():
                 if facility[f'Allowance Surplus/Deficit_{year}'] > 0:
                     curve = self.abatement_cost_curve[
                         self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                    ]
-                    if not curve.empty:
-                        min_sell_price = min(min_sell_price, float(curve.iloc[0]['Intercept']))
-    
-            self.market_price = max(self.floor_price, min_sell_price)
-            print(f"Market is long - price set to: ${self.market_price:.2f}")
-            return self.market_price
-    
+                    ].iloc[0]
+                    min_sell_price = min(min_sell_price, float(curve['Intercept']))
+                    
+            price_drop = (position_ratio - STABILITY_THRESHOLD) * min_sell_price
+            new_price = max(self.floor_price, self.market_price - price_drop)
+            return min(new_price, current_ceiling)
+        
         needed_abatement = demand - supply
-        print(f"Market is short - need {needed_abatement:.2f} abatement")
-    
         clearing_prices = []
-        total_potential_abatement = 0
-    
+        
         for _, facility in self.facilities_data.iterrows():
             curve = self.abatement_cost_curve[
                 self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ]
-            if curve.empty:
-                continue
-    
-            curve = curve.iloc[0]
+            ].iloc[0]
             slope = float(curve['Slope'])
             intercept = float(curve['Intercept'])
             max_reduction = float(curve['Max Reduction (MTCO2e)'])
-    
+            
             if slope > 0:
                 clearing_prices.append(intercept)
-                max_price = intercept + (slope * max_reduction)
-                clearing_prices.append(min(max_price, current_ceiling_price))
-    
-                for pct in [0.25, 0.5, 0.75]:
-                    price = intercept + (slope * max_reduction * pct)
-                    if price < current_ceiling_price:
-                        clearing_prices.append(price)
-    
-                total_potential_abatement += max_reduction
-    
-        clearing_prices.append(current_ceiling_price)
+                max_price = min(intercept + (slope * max_reduction), current_ceiling)
+                clearing_prices.append(max_price)
+        
+        clearing_prices.append(current_ceiling)
         clearing_prices = sorted(set(clearing_prices))
-        print(f"\nTesting {len(clearing_prices)} price points...")
-        print(f"Total potential abatement: {total_potential_abatement:.2f}")
-    
-        best_price = current_ceiling_price
+        
+        best_price = current_ceiling
         min_excess_demand = float('inf')
-    
+        
         for price in clearing_prices:
             potential_abatement = 0
-    
             for _, facility in self.facilities_data.iterrows():
                 curve = self.abatement_cost_curve[
                     self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                ]
-                if curve.empty:
-                    continue
-    
-                curve = curve.iloc[0]
+                ].iloc[0]
                 slope = float(curve['Slope'])
                 intercept = float(curve['Intercept'])
                 max_reduction = float(curve['Max Reduction (MTCO2e)'])
-    
+                
                 if slope > 0 and price > intercept:
-                    econ_abatement = min(
-                        max_reduction,
-                        (price - intercept) / slope
-                    )
+                    econ_abatement = min(max_reduction, (price - intercept) / slope)
                     potential_abatement += econ_abatement
-    
+            
             excess_demand = needed_abatement - potential_abatement
-            print(f"Price ${price:.2f} -> Abatement: {potential_abatement:.2f}, Excess demand: {excess_demand:.2f}")
-    
             if abs(excess_demand) < min_excess_demand:
                 min_excess_demand = abs(excess_demand)
                 best_price = price
-    
                 if excess_demand <= 0:
                     break
-    
-        self.market_price = min(best_price, current_ceiling_price)
-        print(f"\nFinal Market Determination:")
-        print(f"Clearing Price: ${self.market_price:.2f}")
-        print(f"Target Abatement: {needed_abatement:.2f}")
-        print(f"Best Excess Demand: {min_excess_demand:.2f}")
-    
-        return self.market_price
+        
+        price_increase = (position_ratio - STABILITY_THRESHOLD) * (best_price - self.market_price) 
+        new_price = min(self.market_price + price_increase, current_ceiling)
+        return max(self.floor_price, new_price) 
     
     def validate_market_price(self) -> bool:
         """Validate that the market price is within bounds."""
