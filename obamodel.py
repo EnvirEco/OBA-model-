@@ -130,7 +130,11 @@ class obamodel:
         
         # Initialize model columns
         self._initialize_columns()
-        
+                     
+        # Initialize bank balances
+        self._initialize_bank_balances()
+        self.initialize_historical_bank()  # Add this line
+    
         print("\nModel Parameters:")
         print(f"Start Year: {start_year}")
         print(f"End Year: {end_year}")
@@ -400,38 +404,35 @@ class obamodel:
         for year in range(self.start_year, self.end_year + 1):
             print(f"\nProcessing year {year}")
             try:
-                # 1. Calculate base values
+                # 1. Calculate initial positions
                 self.calculate_dynamic_values(year)
                 
-                # 2. Initial market positions
+                # 2. Track and enforce bank limits
+                self.track_vintage_limits(year)
+                
+                # 3. Try bank use for compliance
+                self.use_banked_permits(year)
+                
+                # 4. Calculate remaining market needs
                 supply, demand = self.calculate_market_positions(year)
                 
-                # 3. Determine initial market price
+                # 5. Set market price
                 self.market_price = self.determine_market_price(supply, demand, year)
                 
-                # 4. Calculate abatement
+                # 6. Calculate economic abatement
                 self.calculate_abatement(year)
                 
-                # 5. Make banking decisions if method exists
-                if hasattr(self, 'make_banking_decision'):
-                    self.make_banking_decision(year)
-                
-                # 6. Use banked allowances if method exists
-                if hasattr(self, 'use_banked_allowances'):
-                    self.use_banked_allowances(year)
-                
-                # 7. Execute trades
-                trade_volume, trade_cost = 0.0, 0.0
+                # 7. Execute trading
                 if self.validate_market_price():
                     trade_volume, trade_cost = self.trade_allowances(year)
+                    
+                # 8. Bank remaining surplus
+                self.make_banking_decision(year)
                 
-                #. ceiling prie as backstop
-                self.apply_ceiling_price_compliance(year)  # Apply ceiling price compliance step
+                # 9. Last resort: ceiling price
+                self.apply_ceiling_price_compliance(year)
                 
-                # 8. Calculate costs
-                self.calculate_costs(year)
-                
-                # 9. Generate reports for this year
+                # 10. Generate reports for this year
                 if hasattr(self, 'generate_market_report'):
                     market_report = self.generate_market_report(year)
                     market_reports.append(market_report)
@@ -1182,114 +1183,40 @@ class obamodel:
         return max(0.0, min(1.0, banking_incentive))
 
     def make_banking_decision(self, year: int) -> None:
-        """
-        Make banking decisions for all facilities based on price ceiling trajectory.
-        """
-        print(f"\n=== Making Banking Decisions for Year {year} ===")
-        
-        # Skip if last year
         if year >= self.end_year:
-            print("Final year - no banking decisions needed")
             return
             
-        BANKING_LIMIT = 0.2  # Maximum 20% of surplus can be banked
-        MIN_BANKING_INCENTIVE = 0.1  # Minimum incentive to trigger banking
-        
-        total_banked = 0.0
-        facilities_banking = 0
+        price_ceiling_ratio = self.market_price / self.calculate_price_ceiling(year)
+        banking_incentive = min(0.4, price_ceiling_ratio + 0.1)  # Lower base banking rate
         
         for idx, facility in self.facilities_data.iterrows():
-            # Skip if no surplus
             surplus = facility[f'Allowance Surplus/Deficit_{year}']
             if surplus <= 0:
                 continue
                 
-            # Calculate banking incentive
-            incentive = self.calculate_banking_incentive(year, facility['Facility ID'])
-            
-            if incentive > MIN_BANKING_INCENTIVE:
-                # Calculate amount to bank
-                max_banking = surplus * BANKING_LIMIT
-                banking_amount = max_banking * incentive
-                
-                # Update facility data
-                self.facilities_data.at[idx, f'Banking_Decision_{year}'] = banking_amount
-                self.facilities_data.at[idx, f'Banked_Allowances_{year}'] = banking_amount
-                self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] -= banking_amount
-                
-                total_banked += banking_amount
-                facilities_banking += 1
-                
-                print(f"\nFacility {facility['Facility ID']} banking decision:")
-                print(f"  Surplus: {surplus:.2f}")
-                print(f"  Incentive: {incentive:.2f}")
-                print(f"  Banking Amount: {banking_amount:.2f}")
-        
-        print(f"\nTotal Banking Summary:")
-        print(f"Facilities Banking: {facilities_banking}")
-        print(f"Total Allowances Banked: {total_banked:.2f}")
+            bank_volume = surplus * banking_incentive
+            self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] += bank_volume
+            self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] -= bank_volume 
 
-    def use_banked_allowances(self, year: int) -> None:
-        """
-        Determine usage of banked allowances based on current market conditions.
-        """
-        if year <= self.start_year:
+    def use_banked_permits(self, year: int) -> None:
+        use_rate = min(0.9, self.market_price / self.calculate_price_ceiling(year))
+        
+        if use_rate < 0.3:  # Lower threshold for bank use
             return
             
-        print(f"\n=== Using Banked Allowances for Year {year} ===")
-        
-        # Get previous year's banking
-        prev_year = year - 1
-        banked_cols = [col for col in self.facilities_data.columns if col.startswith('Banked_Allowances_')]
-        
-        total_used = 0.0
-        facilities_using = 0
-        
         for idx, facility in self.facilities_data.iterrows():
-            # Calculate total banked allowances available
-            available_banked = sum(facility[col] for col in banked_cols)
-            
-            if available_banked <= 0:
-                continue
-                
-            # Check if facility needs allowances
-            deficit = -facility[f'Allowance Surplus/Deficit_{year}']
+            deficit = abs(min(0, facility[f'Allowance Surplus/Deficit_{year}']))
             if deficit <= 0:
                 continue
-                
-            # Calculate if profitable to use banked allowances
-            current_price = self.market_price
-            ceiling_price = self.calculate_price_ceiling(year)
+    
+            bank_balance = facility[f'New_Bank_Balance_{year}']
+            use_amount = min(bank_balance, deficit * use_rate)
             
-            # Use banked allowances if current price is close to ceiling
-            price_ratio = current_price / ceiling_price
-            if price_ratio > 0.8:  # Use if price > 80% of ceiling
-                use_amount = min(available_banked, deficit)
-                
-                # Update facility data
-                self.facilities_data.at[idx, f'Used_Banked_Allowances_{year}'] = use_amount
+            if use_amount > 0:
+                self.facilities_data.at[idx, f'New_Bank_Use_{year}'] = use_amount
+                self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] -= use_amount
                 self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += use_amount
-                
-                # Clear used allowances from banked amounts
-                remaining = use_amount
-                for col in sorted(banked_cols):
-                    if remaining <= 0:
-                        break
-                    banked = facility[col]
-                    use_from_this_year = min(banked, remaining)
-                    self.facilities_data.at[idx, col] -= use_from_this_year
-                    remaining -= use_from_this_year
-                
-                total_used += use_amount
-                facilities_using += 1
-                
-                print(f"\nFacility {facility['Facility ID']} using banked allowances:")
-                print(f"  Deficit: {deficit:.2f}")
-                print(f"  Used Amount: {use_amount:.2f}")
-        
-        print(f"\nBanked Allowances Usage Summary:")
-        print(f"Facilities Using Banked Allowances: {facilities_using}")
-        print(f"Total Banked Allowances Used: {total_used:.2f}")
+                    
 
 # 5. Trading Execution
     def evaluate_trade_profitability(self, buyer_id: str, seller_id: str, 
