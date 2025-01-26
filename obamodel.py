@@ -138,17 +138,20 @@ class obamodel:
 	    self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
 	    self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
 	
-	    # Initialize model columns
-	    self._initialize_columns()
-	
-	    # Initialize bank balances
-	    self._initialize_bank_balances()
-	
-	    print("\nModel Parameters:")
-	    print(f"Start Year: {start_year}")
-	    print(f"End Year: {end_year}")
-	    print(f"Price Range: ${self.floor_price} - ${self.ceiling_price}")
-	    print(f"Benchmark Ratchet Rate: {self.benchmark_ratchet_rate:.4f}")
+        # Initialize model columns
+        self._initialize_columns()
+        
+        # Initialize bank balances
+        self._initialize_bank_balances()
+        
+        # Initialize historical bank
+        self.initialize_historical_bank()
+        
+        print("\nModel Parameters:")
+        print(f"Start Year: {start_year}")
+        print(f"End Year: {end_year}")
+        print(f"Price Range: ${self.floor_price} - ${self.ceiling_price}")
+        print(f"Benchmark Ratchet Rate: {self.benchmark_ratchet_rate:.4f}")	    
                  
     def calculate_initial_period(self, year: int) -> None:
         """Calculate first period values with direct allocation calculation."""
@@ -396,9 +399,8 @@ class obamodel:
         print(f"Last year columns present: {all(f'{m}_{self.end_year}' in self.facilities_data.columns for m in metrics)}")
 
     # Define the _initialize_bank_balances method
-    def _initialize_bank_balances(self) -> None:
+    def _initialize_bank_balances(self):
         """Initialize bank balances for all facilities."""
-        # Initialize bank balances for each year
         for year in range(self.start_year, self.end_year + 1):
             self.facilities_data[f'Historical_Bank_Balance_{year}'] = 0.0
             self.facilities_data[f'New_Bank_Balance_{year}'] = 0.0
@@ -406,19 +408,23 @@ class obamodel:
             self.facilities_data[f'New_Bank_Use_{year}'] = 0.0
 
     def initialize_historical_bank(self):
-        """Initialize historical bank at start only."""
+        """Set up historical permit bank at start."""
         total_allocations = self.facilities_data['Baseline Allocations'].sum()
-        historical_permits = total_allocations * self.historical_bank_share
+        historical_share = self.scenario_params.get('historical_bank_share', 0)
+        min_price_ratio = self.scenario_params.get('min_bank_price_ratio', 0)
         
-        # Set initial historical bank balance only for first year
+        self.historical_bank = {
+            'volume': total_allocations * historical_share,
+            'vintage': self.start_year - 1,
+            'min_price': self.ceiling_price * min_price_ratio
+        }
+        
+        # Initialize first year balances
         self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'] = (
-            self.facilities_data['Baseline Allocations'] / total_allocations * historical_permits
+            self.facilities_data['Baseline Allocations'] / total_allocations * 
+            self.historical_bank['volume']
         )
         
-        # Zero out all other years
-        for year in range(self.start_year + 1, self.end_year + 1):
-            self.facilities_data[f'Historical_Bank_Balance_{year}'] = 0  
-    
     def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Execute model with banking capabilities."""
         print("\nExecuting emission trading model with banking...")
@@ -435,33 +441,32 @@ class obamodel:
         for year in range(self.start_year, self.end_year + 1):
             print(f"\nProcessing year {year}")
             try:
-                # 1. Calculate base values (initial positions)
+                # 1. Calculate initial positions
                 self.calculate_dynamic_values(year)
                 
-                # 2. Track vintage limits
+                # 2. Track and enforce bank limits
                 self.track_vintage_limits(year)
                 
-                # 3. Make banking decisions (decides what to bank)
-                self.make_banking_decision(year)
-                
-                # 4. Use banked permits (uses banked permits for compliance)
+                # 3. Try bank use for compliance
                 self.use_banked_permits(year)
                 
-                # 5. Calculate market positions
+                # 4. Calculate remaining market needs
                 supply, demand = self.calculate_market_positions(year)
                 
-                # 6. Determine market price
+                # 5. Set market price
                 self.market_price = self.determine_market_price(supply, demand, year)
                 
-                # 7. Calculate abatement (based on remaining deficits)
+                # 6. Calculate economic abatement
                 self.calculate_abatement(year)
                 
-                # 8. Execute trades
-                trade_volume, trade_cost = 0.0, 0.0
+                # 7. Execute trading
                 if self.validate_market_price():
                     trade_volume, trade_cost = self.trade_allowances(year)
                 
-                # 9. Apply ceiling price compliance (last resort)
+                # 8. Bank remaining surplus
+                self.make_banking_decision(year)
+                
+                # 9. Last resort: ceiling price
                 self.apply_ceiling_price_compliance(year)
                 
                 # 10. Calculate costs
@@ -749,27 +754,7 @@ class obamodel:
             print(f"Emissions: {facility[f'Emissions_{year}']:.4f}")
             print(f"Position: {facility[f'Allowance Surplus/Deficit_{year}']:.4f}")
 
-    def _initialize_banking_columns(self) -> None:
-        """Initialize columns needed for banking."""
-        # Add banking columns for each year
-        for year in range(self.start_year, self.end_year + 1):
-            self.facilities_data[f'Banked_Allowances_{year}'] = 0.0
-            self.facilities_data[f'Banking_Decision_{year}'] = 0.0
-            self.facilities_data[f'Used_Banked_Allowances_{year}'] = 0.0
-
-    def initialize_historical_bank(self):
-        historical_permits = (
-            self.facilities_data['Baseline Allocations'].sum() * 
-            self.historical_bank_share
-        )
-        
-        # Only first year gets historical bank
-        self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'] = (
-            (self.facilities_data['Baseline Allocations'] / 
-             self.facilities_data['Baseline Allocations'].sum()) * 
-            historical_permits
-        )
-  
+           
     def calculate_banking_incentive(self, current_year: int, facility_id: str) -> float:
         current_price = self.market_price
         current_ceiling = self.calculate_price_ceiling(current_year)
