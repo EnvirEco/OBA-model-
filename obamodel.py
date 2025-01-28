@@ -78,80 +78,80 @@ class obamodel:
         except Exception as e:
             print(f"Error loading scenarios: {e}")
             raise
-    
+
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
-	             start_year: int, end_year: int, scenario_params: Dict):
-	    """Initialize OBA model with market-driven pricing."""
-	
-	    # Store scenario parameters as an instance attribute
-	    self.scenario_params = scenario_params
-	
-	    # Validate required columns
-	    required_cols = [
-	        'Facility ID', 'Sector', 'Baseline Output', 'Baseline Emissions',
-	        'Baseline Benchmark', 'Benchmark Ratchet Rate'
-	    ]
-	    missing_cols = [col for col in required_cols if col not in facilities_data.columns]
-	    if missing_cols:
-	        raise ValueError(f"Missing required columns: {missing_cols}")
-	
-	    # Store base data
-	    self.facilities_data = facilities_data.copy()
-	    self.abatement_cost_curve = abatement_cost_curve.copy()
-	    self.start_year = start_year
-	    self.end_year = end_year
-	
-	    self.floor_price = scenario_params.get("floor_price", 20)
-	    self.ceiling_price = scenario_params.get("ceiling_price", 200)
-	    self.price_increment = scenario_params.get("price_increment", 10)  # Get from scenario
-	    self.market_price = self.floor_price  # Initialize market price
-	    self.historical_bank_share = scenario_params.get("historical_bank_share", 0)
-	    self.min_bank_price_ratio = scenario_params.get("min_bank_price_ratio", 0)
-	    self.vintage_limit = scenario_params.get("vintage_limit", 0)
-	
-	    print("\nPrice Control Parameters:")
-	    print(f"Floor Price: ${self.floor_price:.2f}")
-	    print(f"Base Ceiling Price: ${self.ceiling_price:.2f}")
-	    print(f"Price Increment: ${self.price_increment:.2f}/year")
-	    print(f"Initial Market Price: ${self.market_price:.2f}")
-	
-	    # Verify facility data
-	    print("\nFacility Data Verification:")
-	    print(f"Number of facilities: {len(self.facilities_data)}")
-	    print("\nTotal Baseline Values:")
-	    print(f"Total Baseline Emissions: {self.facilities_data['Baseline Emissions'].sum():.4f}")
-	    print(f"Total Baseline Output: {self.facilities_data['Baseline Output'].sum():.4f}")
-	
-	    # Sample verification
-	    print("\nSample Facility Data:")
-	    sample = self.facilities_data.head()
-	    print(sample[['Facility ID', 'Baseline Emissions', 'Baseline Output', 'Baseline Benchmark']])
-	
-	    # Store scenario parameters
-	    self.output_growth_rate = scenario_params.get("output_growth_rate", 0.00)
-	    self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.00)
-	    self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.00)
-	
-	    # MSR parameters
-	    self.msr_active = scenario_params.get("msr_active", False)
-	    self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
-	    self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
-	    self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
-	
+                 start_year: int, end_year: int, scenario_params: Dict):
+        """Initialize OBA model with market-driven pricing."""
+    
+        # Store scenario parameters as an instance attribute
+        self.scenario_params = scenario_params
+    
+        # Validate required columns
+        required_cols = [
+            'Facility ID', 'Sector', 'Baseline Output', 'Baseline Emissions',
+            'Baseline Benchmark', 'Benchmark Ratchet Rate'
+        ]
+        missing_cols = [col for col in required_cols if col not in facilities_data.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+    
+        # Store base data
+        self.facilities_data = facilities_data.copy()
+        self.abatement_cost_curve = abatement_cost_curve.copy()
+        self.start_year = start_year
+        self.end_year = end_year
+    
+        self.floor_price = scenario_params.get("floor_price", 20)
+        self.ceiling_price = scenario_params.get("ceiling_price", 200)
+        self.price_increment = scenario_params.get("price_increment", 10)  # Get from scenario
+        self.market_price = self.floor_price  # Initialize market price
+        self.historical_bank_share = scenario_params.get('historical_bank_share', 0)
+        self.min_bank_price_ratio = scenario_params.get('min_bank_price_ratio', 0)
+        self.vintage_limit = scenario_params.get("vintage_limit", 0)
+    
+        print("\nPrice Control Parameters:")
+        print(f"Floor Price: ${self.floor_price:.2f}")
+        print(f"Base Ceiling Price: ${self.ceiling_price:.2f}")
+        print(f"Price Increment: ${self.price_increment:.2f}/year")
+        print(f"Initial Market Price: ${self.market_price:.2f}")
+    
+        # Verify facility data
+        print("\nFacility Data Verification:")
+        print(f"Number of facilities: {len(self.facilities_data)}")
+        print("\nTotal Baseline Values:")
+        print(f"Total Baseline Emissions: {self.facilities_data['Baseline Emissions'].sum():.4f}")
+        print(f"Total Baseline Output: {self.facilities_data['Baseline Output'].sum():.4f}")
+    
+        # Sample verification
+        print("\nSample Facility Data:")
+        sample = self.facilities_data.head()
+        print(sample[['Facility ID', 'Baseline Emissions', 'Baseline Output', 'Baseline Benchmark']])
+    
+        # Store scenario parameters
+        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.00)
+        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.00)
+        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.00)
+    
+        # MSR parameters
+        self.msr_active = scenario_params.get("msr_active", False)
+        self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
+        self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
+        self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
+    
         # Initialize model columns
         self._initialize_columns()
-        
+    
         # Initialize bank balances
         self._initialize_bank_balances()
-        
+    
         # Initialize historical bank
         self.initialize_historical_bank()
-        
+    
         print("\nModel Parameters:")
         print(f"Start Year: {start_year}")
         print(f"End Year: {end_year}")
         print(f"Price Range: ${self.floor_price} - ${self.ceiling_price}")
-        print(f"Benchmark Ratchet Rate: {self.benchmark_ratchet_rate:.4f}")	    
+        print(f"Benchmark Ratchet Rate: {self.benchmark_ratchet_rate:.4f}")
                  
     def calculate_initial_period(self, year: int) -> None:
         """Calculate first period values with direct allocation calculation."""
@@ -410,7 +410,7 @@ class obamodel:
     def initialize_historical_bank(self):
         """Set up historical permit bank at start."""
         total_allocations = self.facilities_data['Baseline Allocations'].sum()
-        historical_share = self.scenario_params.get('historical_bank_share', 0)
+        historical_share = self.scenario_params['historical_bank_share'] if isinstance(self.scenario_params, dict) else getattr(self.scenario_params, 'historical_bank_share', 0)
         min_price_ratio = self.scenario_params.get('min_bank_price_ratio', 0)
         
         self.historical_bank = {
@@ -424,6 +424,7 @@ class obamodel:
             self.facilities_data['Baseline Allocations'] / total_allocations * 
             self.historical_bank['volume']
         )
+
         
     def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Execute model with banking capabilities."""
