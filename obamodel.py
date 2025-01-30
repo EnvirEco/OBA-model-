@@ -568,7 +568,9 @@ class obamodel:
                 'output_growth_rate': params.get('output_growth_rate', self.output_growth_rate),
                 'emissions_growth_rate': params.get('emissions_growth_rate', self.emissions_growth_rate),
                 'benchmark_ratchet_rate': params.get('benchmark_ratchet_rate', 0.02),
-                'msr_active': params.get('msr_active', self.msr_active)
+                'msr_active': params.get('msr_active', self.msr_active),
+                'historical_bank_share': params.get('historical_bank_share', self.historical_bank_share),
+                'min_bank_price_ratio': params.get('min_bank_price_ratio', self.min_bank_price_ratio)
             }
     
             # Update class attributes with scenario parameters
@@ -771,23 +773,31 @@ class obamodel:
         return max(0.0, min(1.0, banking_incentive))
 
     def track_vintage_limits(self, year: int) -> None:
-  	    """Track and enforce vintage limits on banked permits."""
-  	    for idx, facility in self.facilities_data.iterrows():
-  	        # Track vintages for new bank
-  	        new_bank_vintages = {}
-  	        for past_year in range(max(self.start_year, year - self.vintage_limit), year + 1):
-  	            banked = facility[f'New_Bank_Balance_{past_year}']
-  	            if banked > 0:
-  	                new_bank_vintages[past_year] = banked
-  	
-  	        # Expire old vintages
-  	        valid_balance = sum(new_bank_vintages.values())
-  	        self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] = valid_balance
-  	
-  	        # Historical bank doesn't expire but track usage
-  	        if year - self.start_year > self.vintage_limit:
-  	            self.facilities_data.at[idx, f'Historical_Bank_Balance_{year}']     
-			    
+        """Track and enforce vintage limits on banked permits."""
+        for idx, facility in self.facilities_data.iterrows():
+            # Track vintages for new bank
+            new_bank_vintages = {}
+            for past_year in range(max(self.start_year, year - self.vintage_limit), year + 1):
+                banked = facility[f'New_Bank_Balance_{past_year}']
+                if banked > 0:
+                    new_bank_vintages[past_year] = banked
+
+            # Expire old vintages
+            valid_balance = sum(new_bank_vintages.values())
+            self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] = valid_balance
+
+            # Historical bank doesn't expire but track usage
+            if year - self.start_year > self.vintage_limit:
+                self.facilities_data.at[idx, f'Historical_Bank_Balance_{year}']
+    
+    def _initialize_banking_columns(self) -> None:
+            """Initialize banking columns for all facilities."""
+            for year in range(self.start_year, self.end_year + 1):
+                self.facilities_data[f'Historical_Bank_Balance_{year}'] = 0.0
+                self.facilities_data[f'New_Bank_Balance_{year}'] = 0.0
+                self.facilities_data[f'Historical_Bank_Use_{year}'] = 0.0
+                self.facilities_data[f'New_Bank_Use_{year}'] = 0.0
+                        
     def make_banking_decision(self, year: int) -> None:
         """Execute banking decisions for facilities."""
         if year >= self.end_year:
