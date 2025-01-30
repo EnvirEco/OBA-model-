@@ -1,7 +1,9 @@
+
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple
 import os
+from typing import List, Dict, Tuple
 from pathlib import Path
 
 class obamodel:
@@ -28,7 +30,10 @@ class obamodel:
                 'MSR Active': (0, 1),
                 'MSR Upper Threshold': (0, 1),
                 'MSR Lower Threshold': (-1, 0),
-                'MSR Adjustment Rate': (0, 1)
+                'MSR Adjustment Rate': (0, 1),
+                'Historical Bank Share': (0, 1),  
+                'Min Bank Price Ratio': (0, 1),
+                'Vintage Limit': (0, 10)
             }
             
             # Validate parameters
@@ -54,7 +59,10 @@ class obamodel:
                     "msr_active": bool(row["MSR Active"]),
                     "msr_upper_threshold": float(row["MSR Upper Threshold"]),
                     "msr_lower_threshold": float(row["MSR Lower Threshold"]),
-                    "msr_adjustment_rate": float(row["MSR Adjustment Rate"])
+                    "msr_adjustment_rate": float(row["MSR Adjustment Rate"]),
+                    "historical_bank_share": float(row["Historical Bank Share"]),
+                    "min_bank_price_ratio": float(row["Min Bank Price Ratio"]), 
+                    "vintage_limit": int(row["Vintage Limit"])
                 }
                 
                 scenario_list.append(scenario)
@@ -71,10 +79,18 @@ class obamodel:
         except Exception as e:
             print(f"Error loading scenarios: {e}")
             raise
-    
+
     def __init__(self, facilities_data: pd.DataFrame, abatement_cost_curve: pd.DataFrame, 
                  start_year: int, end_year: int, scenario_params: Dict):
         """Initialize OBA model with market-driven pricing."""
+    
+          # Ensure scenario_params is a dictionary
+        if not isinstance(scenario_params, dict):
+            raise TypeError(f"Expected scenario_params to be dict, got {type(scenario_params)}")
+    
+        # Store scenario parameters as an instance attribute
+        self.scenario_params = scenario_params
+    
         # Validate required columns
         required_cols = [
             'Facility ID', 'Sector', 'Baseline Output', 'Baseline Emissions',
@@ -83,57 +99,58 @@ class obamodel:
         missing_cols = [col for col in required_cols if col not in facilities_data.columns]
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
-        
+    
         # Store base data
         self.facilities_data = facilities_data.copy()
         self.abatement_cost_curve = abatement_cost_curve.copy()
         self.start_year = start_year
         self.end_year = end_year
-        
+    
         self.floor_price = scenario_params.get("floor_price", 20)
         self.ceiling_price = scenario_params.get("ceiling_price", 200)
         self.price_increment = scenario_params.get("price_increment", 10)  # Get from scenario
         self.market_price = self.floor_price  # Initialize market price
-        
+        self.historical_bank_share = scenario_params.get('historical_bank_share', 0)
+        self.min_bank_price_ratio = scenario_params.get('min_bank_price_ratio', 0)
+        self.vintage_limit = scenario_params.get("vintage_limit", 0)
+    
         print("\nPrice Control Parameters:")
         print(f"Floor Price: ${self.floor_price:.2f}")
         print(f"Base Ceiling Price: ${self.ceiling_price:.2f}")
         print(f"Price Increment: ${self.price_increment:.2f}/year")
         print(f"Initial Market Price: ${self.market_price:.2f}")
-                              
+    
         # Verify facility data
         print("\nFacility Data Verification:")
         print(f"Number of facilities: {len(self.facilities_data)}")
         print("\nTotal Baseline Values:")
         print(f"Total Baseline Emissions: {self.facilities_data['Baseline Emissions'].sum():.4f}")
         print(f"Total Baseline Output: {self.facilities_data['Baseline Output'].sum():.4f}")
-        
+    
         # Sample verification
         print("\nSample Facility Data:")
         sample = self.facilities_data.head()
         print(sample[['Facility ID', 'Baseline Emissions', 'Baseline Output', 'Baseline Benchmark']])
-        
-        self.abatement_cost_curve = abatement_cost_curve.copy()
-        self.start_year = start_year
-        self.end_year = end_year
-        
+    
         # Store scenario parameters
-        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.02)
-        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.01)
-        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.05)
-        
+        self.output_growth_rate = scenario_params.get("output_growth_rate", 0.00)
+        self.emissions_growth_rate = scenario_params.get("emissions_growth_rate", 0.00)
+        self.benchmark_ratchet_rate = scenario_params.get("benchmark_ratchet_rate", 0.00)
+    
         # MSR parameters
         self.msr_active = scenario_params.get("msr_active", False)
         self.msr_upper_threshold = scenario_params.get("msr_upper_threshold", 0.15)
         self.msr_lower_threshold = scenario_params.get("msr_lower_threshold", -0.05)
         self.msr_adjustment_rate = scenario_params.get("msr_adjustment_rate", 0.03)
-        
+    
         # Initialize model columns
         self._initialize_columns()
-                     
+    
         # Initialize bank balances
         self._initialize_bank_balances()
-        self.initialize_historical_bank()  # Add this line
+    
+        # Initialize historical bank
+        self.initialize_historical_bank()
     
         print("\nModel Parameters:")
         print(f"Start Year: {start_year}")
@@ -324,36 +341,36 @@ class obamodel:
             "Tonnes Abated", "Allowance Purchase Cost", "Allowance Sales Revenue",
             "Compliance Cost", "Cost to Profit Ratio", "Cost to Output Ratio"
         ]
-        
+    
         # Add MSR-specific metrics if MSR is active
         if self.msr_active:
             metrics.extend([
                 "MSR_Adjustment",
                 "MSR_Active"
             ])
-        
+    
         # Create and verify year-specific columns
         year_cols = []
         for year in range(self.start_year, self.end_year + 1):
             for metric in metrics:
                 col_name = f"{metric}_{year}"
                 year_cols.append(col_name)
-                
+    
         # Create new columns with explicit zeros
         new_cols = pd.DataFrame(
             data=0.0,
             index=self.facilities_data.index,
             columns=year_cols
         )
-        
+    
         # Verify all required columns exist before concatenating
         missing_cols = set(year_cols) - set(new_cols.columns)
         if missing_cols:
             raise ValueError(f"Failed to create columns: {missing_cols}")
-        
+    
         # Concat with existing data
         self.facilities_data = pd.concat([self.facilities_data, new_cols], axis=1)
-        
+    
         # Verify critical columns after concatenation
         for year in range(self.start_year, self.end_year + 1):
             critical_cols = [
@@ -365,7 +382,7 @@ class obamodel:
             missing = [col for col in critical_cols if col not in self.facilities_data.columns]
             if missing:
                 raise ValueError(f"Critical columns missing after initialization: {missing}")
-        
+    
         # Calculate Baseline Allocations if needed
         if 'Baseline Allocations' not in self.facilities_data.columns:
             self.facilities_data['Baseline Allocations'] = (
@@ -379,28 +396,58 @@ class obamodel:
                 self.facilities_data['Baseline Output'] * 
                 self.facilities_data['Baseline Profit Rate']
             )
-        
+    
         # Print verification of critical columns
         print("\nInitialized columns verification:")
         print(f"Total columns created: {len(year_cols)}")
         print(f"First year columns present: {all(f'{m}_{self.start_year}' in self.facilities_data.columns for m in metrics)}")
         print(f"Last year columns present: {all(f'{m}_{self.end_year}' in self.facilities_data.columns for m in metrics)}")
-        
 
-# 3. Core Model Execution Methods
+    # Define the _initialize_bank_balances method
+    def _initialize_bank_balances(self):
+        """Initialize bank balances for all facilities."""
+        for year in range(self.start_year, self.end_year + 1):
+            self.facilities_data[f'Historical_Bank_Balance_{year}'] = 0.0
+            self.facilities_data[f'New_Bank_Balance_{year}'] = 0.0
+            self.facilities_data[f'Historical_Bank_Use_{year}'] = 0.0
+            self.facilities_data[f'New_Bank_Use_{year}'] = 0.0
+
+    def initialize_historical_bank(self):
+        """Set up historical permit bank at start."""
+        total_allocations = self.facilities_data['Baseline Allocations'].sum()
+
+        # Debugging print
+        print(f"DEBUG: scenario_params = {self.scenario_params}")
+
+        historical_share = self.scenario_params.get('historical_bank_share', 0)
+        min_price_ratio = self.scenario_params.get('min_bank_price_ratio', 0)
+        
+        self.historical_bank = {
+            'volume': total_allocations * self.scenario_params.get('historical_bank_share', 0),
+            'vintage': self.start_year - 1,  # Pre-existing credits
+            'min_price': self.ceiling_price * min_price_ratio
+        }
+        
+        # Initialize first year balances
+        self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'] = (
+            self.facilities_data['Baseline Allocations'] / total_allocations * 
+            self.historical_bank['volume']
+        )
+
+        
     def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Execute model with banking capabilities."""
         print("\nExecuting emission trading model with banking...")
-        
+    
         # Initialize banking columns if needed
         if hasattr(self, '_initialize_banking_columns'):
             self._initialize_banking_columns()
-        
+    
         market_summary = []
         sector_summaries = []
         market_reports = []
         compliance_reports = []
-        
+    
         for year in range(self.start_year, self.end_year + 1):
             print(f"\nProcessing year {year}")
             try:
@@ -425,14 +472,17 @@ class obamodel:
                 # 7. Execute trading
                 if self.validate_market_price():
                     trade_volume, trade_cost = self.trade_allowances(year)
-                    
+                
                 # 8. Bank remaining surplus
                 self.make_banking_decision(year)
                 
                 # 9. Last resort: ceiling price
                 self.apply_ceiling_price_compliance(year)
                 
-                # 10. Generate reports for this year
+                # 10. Calculate costs
+                self.calculate_costs(year)
+                
+                # 11. Generate reports
                 if hasattr(self, 'generate_market_report'):
                     market_report = self.generate_market_report(year)
                     market_reports.append(market_report)
@@ -441,15 +491,17 @@ class obamodel:
                     compliance_report = self.generate_compliance_report(year)
                     compliance_reports.append(compliance_report)
                 
-                # 10. Store results
+                # 12. Store results
                 market_summary.append(self._create_market_summary(year))
                 sector_summaries.append(self.create_sector_summary(year))
                 
             except Exception as e:
                 print(f"Error in year {year}: {str(e)}")
+                print("Current DataFrame columns:")
+                print(self.facilities_data.columns)                
                 raise
-        
-        # Convert all results to DataFrames
+    
+        # Convert results to DataFrames    
         try:
             market_summary_df = pd.DataFrame(market_summary)
             sector_summary_df = pd.concat(sector_summaries, ignore_index=True) if sector_summaries else pd.DataFrame()
@@ -457,14 +509,12 @@ class obamodel:
             market_reports_df = pd.concat(market_reports, ignore_index=True) if market_reports else pd.DataFrame()
             compliance_reports_df = pd.concat(compliance_reports, ignore_index=True) if compliance_reports else pd.DataFrame()
             
-            return (market_summary_df, sector_summary_df, facility_results, 
-                    compliance_reports_df, market_reports_df)
+            return (market_summary_df, sector_summary_df, facility_results, compliance_reports_df, market_reports_df)
         except Exception as e:
             print(f"Error converting results to DataFrames: {str(e)}")
-            # Return empty DataFrames in case of error
-            return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), 
-                    pd.DataFrame(), pd.DataFrame())
+            return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
 
+        
     def validate_scenario_parameters(self, scenario_type: str, params: Dict) -> bool:
         """Validate parameters for any scenario type"""
         # Validate base parameters
@@ -474,7 +524,10 @@ class obamodel:
             'price_increment': (0, None),  # Add explicit validation for price_increment
             'output_growth_rate': (-0.5, 0.5),
             'emissions_growth_rate': (-0.5, 0.5),
-            'benchmark_ratchet_rate': (0, 1)
+            'benchmark_ratchet_rate': (0, 1),
+            'historical_bank_share': (0, 1),
+            'min_bank_price_ratio': (0, 1),
+            'vintage_limit': (0, 10)
         }
         
         # Validate each parameter
@@ -499,15 +552,22 @@ class obamodel:
         
         return True    
 
-    
     def run_scenario(self, scenario_type: str, params: Dict = None) -> Dict:
         """Execute any scenario type with specified parameters."""
         print(f"\nExecuting {scenario_type} scenario...")
+        print(f"DEBUG: Scenario parameters received: {params}")
+        
         
         # Set up base parameters
         if params is None:
             params = {}
-                
+
+        
+
+        # Ensure params is a dictionary
+        if not isinstance(params, dict):
+            raise TypeError(f"Expected params to be dict, got {type(params)}")
+             
         # Store original values to restore later
         original_values = {
             'ceiling_price': self.ceiling_price,
@@ -515,7 +575,8 @@ class obamodel:
             'output_growth_rate': self.output_growth_rate,
             'emissions_growth_rate': self.emissions_growth_rate,
             'benchmark_ratchet_rate': self.benchmark_ratchet_rate,
-            'msr_active': self.msr_active if hasattr(self, 'msr_active') else False
+            'msr_active': self.msr_active if hasattr(self, 'msr_active') else False,
+            'historical_bank_share': self.historical_bank_share if hasattr(self, 'historical_bank_share') else 0.0,
         }
         
         try:
@@ -527,7 +588,13 @@ class obamodel:
                 'output_growth_rate': params.get('output_growth_rate', self.output_growth_rate),
                 'emissions_growth_rate': params.get('emissions_growth_rate', self.emissions_growth_rate),
                 'benchmark_ratchet_rate': params.get('benchmark_ratchet_rate', 0.02),
-                'msr_active': False
+                'msr_active': params.get('msr_active', self.msr_active),
+                'msr_upper_threshold': params.get('msr_upper_threshold', self.msr_upper_threshold),
+                'msr_lower_threshold': params.get('msr_lower_threshold', self.msr_lower_threshold),
+                'msr_adjustment_rate': params.get('msr_adjustment_rate', self.msr_adjustment_rate),
+                'historical_bank_share': params.get('historical_bank_share', self.historical_bank_share),
+                'min_bank_price_ratio': params.get('min_bank_price_ratio', self.min_bank_price_ratio),
+                'vintage_limit': params.get('vintage_limit', self.vintage_limit)
             }
     
             # Update class attributes with scenario parameters
@@ -536,6 +603,7 @@ class obamodel:
             self.output_growth_rate = scenario_params['output_growth_rate']
             self.emissions_growth_rate = scenario_params['emissions_growth_rate']
             self.benchmark_ratchet_rate = scenario_params['benchmark_ratchet_rate']
+            self.msr_active = scenario_params['msr_active']
             
             # Print scenario settings for verification
             print("\nScenario Parameter Verification:")
@@ -543,12 +611,6 @@ class obamodel:
             print(f"Price Increment: ${self.price_increment:.2f}/year")
             print(f"Output Growth Rate: {self.output_growth_rate:.3f}")
             print(f"Emissions Growth Rate: {self.emissions_growth_rate:.3f}")
-            
-            # Add specific verification for price increment
-            print("\nPrice Ceiling Path Verification:")
-            for test_year in range(self.start_year, self.end_year + 1):
-                ceiling = self.calculate_price_ceiling(test_year)
-                print(f"Year {test_year} Ceiling: ${ceiling:.2f}")
             
             # Run model
             (market_summary, sector_summary, facility_results, 
@@ -571,7 +633,8 @@ class obamodel:
         finally:
             # Restore original values
             for key, value in original_values.items():
-                setattr(self, key, value)
+                setattr(self, key, value)    
+     
        
     def _empty_scenario_result(self, scenario_type: str, params: Dict) -> Dict:
         """Return empty result structure for failed scenarios"""
@@ -602,88 +665,64 @@ class obamodel:
 
 # 2. Dynamic Value Calculations
     def calculate_dynamic_values(self, year: int) -> None:
-        """Calculate base values with explicit emissions verification."""
-        print(f"\n=== Calculating Values for Year {year} ===")
-        
-        if year == self.start_year:
-            # First period - use baseline values directly
-            print("\nSetting First Period Values...")
-            print("Before Setting:")
-            before_emissions = self.facilities_data[f'Emissions_{year}'].sum() if f'Emissions_{year}' in self.facilities_data.columns else 0
-            print(f"Total Emissions Before: {before_emissions:.4f}")
-            print(f"Baseline Emissions: {self.facilities_data['Baseline Emissions'].sum():.4f}")
-            
-            # Set values
-            self.facilities_data[f'Output_{year}'] = self.facilities_data['Baseline Output']
-            self.facilities_data[f'Emissions_{year}'] = self.facilities_data['Baseline Emissions']
-            
-            # Verify
-            print("\nAfter Setting:")
-            print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
-            print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
-            
-            # Sample verification
-            print("\nSample Facility Verification:")
-            sample = self.facilities_data.iloc[0]
-            print(f"Facility: {sample['Facility ID']}")
-            print(f"Baseline Emissions: {sample['Baseline Emissions']:.4f}")
-            print(f"Current Emissions: {sample[f'Emissions_{year}']:.4f}")
-            
-            # Full verification
-            discrepancies = self.facilities_data[
-                abs(self.facilities_data[f'Emissions_{year}'] - 
-                    self.facilities_data['Baseline Emissions']) > 0.0001
-            ]
-            if not discrepancies.empty:
-                print("\nWARNING: Found emissions discrepancies:")
-                for _, facility in discrepancies.iterrows():
-                    print(f"Facility {facility['Facility ID']}:")
-                    print(f"Baseline: {facility['Baseline Emissions']:.4f}")
-                    print(f"Current: {facility[f'Emissions_{year}']:.4f}")
-        else:
-            # Subsequent years - apply growth
-            years_elapsed = year - self.start_year
-            growth_factor = (1 + self.emissions_growth_rate) ** years_elapsed
-            
-            print(f"\nCalculating Year {year} Emissions:")
-            print(f"Years Elapsed: {years_elapsed}")
-            print(f"Growth Factor: {growth_factor:.4f}")
-            
-            self.facilities_data[f'Output_{year}'] = (
-                self.facilities_data['Baseline Output'] *
-                (1 + self.output_growth_rate) ** years_elapsed
-            )
-            
-            self.facilities_data[f'Emissions_{year}'] = (
-                self.facilities_data['Baseline Emissions'] * growth_factor
-            )
-        
-        # Calculate benchmarks
-        years_of_ratchet = year - (self.start_year - 1)
-        ratchet_factor = (1 - self.benchmark_ratchet_rate) ** years_of_ratchet
-        
-        self.facilities_data[f'Benchmark_{year}'] = (
-            self.facilities_data['Baseline Benchmark'] * ratchet_factor
-        )
-        
-        # Calculate allocations
-        self.facilities_data[f'Allocations_{year}'] = (
-            self.facilities_data[f'Output_{year}'] * 
-            self.facilities_data[f'Benchmark_{year}']
-        )
-        
-        # Calculate initial positions
-        self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
-            self.facilities_data[f'Allocations_{year}'] - 
-            self.facilities_data[f'Emissions_{year}']
-        )
-        
-        # Print final verification
-        print("\nFinal Values:")
-        print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
-        print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
-        print(f"Total Allocations: {self.facilities_data[f'Allocations_{year}'].sum():.4f}")
-        print(f"Net Position: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum():.4f}")
+       """Calculate base values with growth rates and abatement."""
+       print(f"\n=== Calculating Values for Year {year} ===")
+       
+       if year == self.start_year:
+           # First period - use baseline values
+           self.facilities_data[f'Output_{year}'] = self.facilities_data['Baseline Output']
+           self.facilities_data[f'Emissions_{year}'] = self.facilities_data['Baseline Emissions']
+           
+           print("\nFirst Period Values:")
+           print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
+           print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
+           
+       else:
+           # Subsequent years
+           years_elapsed = year - self.start_year
+           
+           # Only apply growth if rates are non-zero
+           output_factor = (1 + self.output_growth_rate) ** years_elapsed if self.output_growth_rate != 0 else 1
+           emissions_factor = (1 + self.emissions_growth_rate) ** years_elapsed if self.emissions_growth_rate != 0 else 1
+           
+           print(f"\nYear {year} Growth Factors:")
+           print(f"Output Growth: {output_factor:.4f}")
+           print(f"Emissions Growth: {emissions_factor:.4f}")
+           
+           # Apply growth factors
+           self.facilities_data[f'Output_{year}'] = (
+               self.facilities_data['Baseline Output'] * output_factor
+           )
+           
+           # Calculate emissions with growth and subtract previous year's abatement
+           base_emissions = self.facilities_data['Baseline Emissions'] * emissions_factor
+           prev_abatement = self.facilities_data[f'Tonnes Abated_{year-1}'].fillna(0)
+           self.facilities_data[f'Emissions_{year}'] = base_emissions - prev_abatement
+       
+       # Calculate benchmarks with ratchet
+       years_of_ratchet = year - (self.start_year - 1)
+       ratchet_factor = (1 - self.benchmark_ratchet_rate) ** years_of_ratchet if self.benchmark_ratchet_rate != 0 else 1
+       
+       self.facilities_data[f'Benchmark_{year}'] = (
+           self.facilities_data['Baseline Benchmark'] * ratchet_factor
+       )
+       
+       # Calculate allocations and positions
+       self.facilities_data[f'Allocations_{year}'] = (
+           self.facilities_data[f'Output_{year}'] * 
+           self.facilities_data[f'Benchmark_{year}']
+       )
+       
+       self.facilities_data[f'Allowance Surplus/Deficit_{year}'] = (
+           self.facilities_data[f'Allocations_{year}'] - 
+           self.facilities_data[f'Emissions_{year}']
+       )
+       
+       print("\nFinal Values:")
+       print(f"Total Output: {self.facilities_data[f'Output_{year}'].sum():.4f}")
+       print(f"Total Emissions: {self.facilities_data[f'Emissions_{year}'].sum():.4f}")
+       print(f"Total Allocations: {self.facilities_data[f'Allocations_{year}'].sum():.4f}")
+       print(f"Net Position: {self.facilities_data[f'Allowance Surplus/Deficit_{year}'].sum():.4f}")
     
     def update_surplus_deficit(self, year: int) -> None:
         """Update allowance surplus/deficit positions after trading."""
@@ -742,8 +781,93 @@ class obamodel:
             print(f"Emissions: {facility[f'Emissions_{year}']:.4f}")
             print(f"Position: {facility[f'Allowance Surplus/Deficit_{year}']:.4f}")
 
-   
+           
+    def calculate_banking_incentive(self, current_year: int, facility_id: str) -> float:
+        current_price = self.market_price
+        current_ceiling = self.calculate_price_ceiling(current_year)
+        next_year_ceiling = self.calculate_price_ceiling(current_year + 1)
+        
+        # Price closer to ceiling increases incentive
+        price_ratio = current_price / current_ceiling
+        # Higher ceiling growth increases incentive  
+        ceiling_growth = (next_year_ceiling - current_ceiling) / current_ceiling
+        
+        banking_incentive = 0.7 * price_ratio + 0.3 * ceiling_growth
+        
+        return max(0.0, min(1.0, banking_incentive))
 
+    def track_vintage_limits(self, year: int) -> None:
+        """Track and enforce vintage limits on banked permits."""
+        for idx, facility in self.facilities_data.iterrows():
+            # Track vintages for new bank
+            new_bank_vintages = {}
+            for past_year in range(max(self.start_year, year - self.vintage_limit), year + 1):
+                banked = facility[f'New_Bank_Balance_{past_year}']
+                if banked > 0:
+                    new_bank_vintages[past_year] = banked
+
+            # Expire old vintages
+            valid_balance = sum(new_bank_vintages.values())
+            self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] = valid_balance
+
+            # Historical bank doesn't expire but track usage
+            if year - self.start_year > self.vintage_limit:
+                self.facilities_data.at[idx, f'Historical_Bank_Balance_{year}']
+    
+    def _initialize_banking_columns(self) -> None:
+            """Initialize banking columns for all facilities."""
+            for year in range(self.start_year, self.end_year + 1):
+                self.facilities_data[f'Historical_Bank_Balance_{year}'] = 0.0
+                self.facilities_data[f'New_Bank_Balance_{year}'] = 0.0
+                self.facilities_data[f'Historical_Bank_Use_{year}'] = 0.0
+                self.facilities_data[f'New_Bank_Use_{year}'] = 0.0
+                        
+    def make_banking_decision(self, year: int) -> None:
+        """Execute banking decisions for facilities."""
+        if year >= self.end_year:
+            return
+        
+        # Ensure the Banking_Decision column exists for this year
+        if f'Banking_Decision_{year}' not in self.facilities_data.columns:
+            self.facilities_data[f'Banking_Decision_{year}'] = 0.0
+        
+        for idx, facility in self.facilities_data.iterrows():
+            surplus = facility[f'Allowance Surplus/Deficit_{year}']
+            if surplus <= 0:
+                continue
+            
+            # More aggressive banking when prices are rising
+            price_ceiling_ratio = self.market_price / self.calculate_price_ceiling(year)
+            banking_incentive = min(0.8, price_ceiling_ratio + 0.2)  # More aggressive banking
+            
+            bank_volume = surplus * banking_incentive
+            
+            # Update banking decision and positions
+            self.facilities_data.at[idx, f'Banking_Decision_{year}'] = bank_volume
+            self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] = (
+                self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] + bank_volume
+            )
+            self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] -= bank_volume
+  
+    def use_banked_permits(self, year: int) -> None:
+        for idx, facility in self.facilities_data.iterrows():
+            deficit = abs(min(0, facility[f'Allowance Surplus/Deficit_{year}']))
+            if deficit <= 0:
+                continue
+    
+            # Use more bank as price rises
+            use_rate = min(0.9, self.market_price / self.calculate_price_ceiling(year))
+            target_use = deficit * use_rate
+    
+            bank_balance = facility[f'New_Bank_Balance_{year}']
+            use_amount = min(bank_balance, target_use)
+            
+            if use_amount > 0:
+                self.facilities_data.at[idx, f'New_Bank_Use_{year}'] = use_amount
+                self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] -= use_amount
+                self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += use_amount 
+
+  
 # 3. Market Position Analysis
     def calculate_market_positions(self, year: int) -> Tuple[float, float]:
         """Calculate market supply and demand positions."""
@@ -802,8 +926,6 @@ class obamodel:
         
         return total_supply, total_demand
 
-
-   
     def analyze_market_stability(self, year: int) -> None:
         """Analyze market stability with sector-specific reporting."""
         print(f"\n=== Market Stability Analysis Year {year} ===")
@@ -881,109 +1003,79 @@ class obamodel:
         print(f"Price increment: ${self.price_increment:.2f}")
         print(f"Calculated ceiling: ${ceiling:.2f}")
         
-        return ceiling 
-
+        return ceiling
+        
     def determine_market_price(self, supply: float, demand: float, year: int) -> float:
         """Determine market price based on supply/demand and MAC curves."""
         print(f"\n=== Market Price Determination for Year {year} ===")
-        print(f"Supply: {supply:.2f}")
-        print(f"Demand: {demand:.2f}")
-        print(f"Current Base Ceiling: ${self.ceiling_price:.2f}")
-        print(f"Current Price Increment: ${self.price_increment:.2f}/year")
+        current_ceiling = self.calculate_price_ceiling(year)
+        STABILITY_THRESHOLD = 0.1
         
-        current_ceiling_price = self.calculate_price_ceiling(year)
+        net_position = supply - demand
+        position_ratio = abs(net_position) / max(supply, demand)
     
+        if position_ratio < STABILITY_THRESHOLD:
+            return min(self.market_price, current_ceiling)
+            
         if supply >= demand:
             min_sell_price = float('inf')
             for _, facility in self.facilities_data.iterrows():
                 if facility[f'Allowance Surplus/Deficit_{year}'] > 0:
                     curve = self.abatement_cost_curve[
                         self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                    ]
-                    if not curve.empty:
-                        min_sell_price = min(min_sell_price, float(curve.iloc[0]['Intercept']))
-    
-            self.market_price = max(self.floor_price, min_sell_price)
-            print(f"Market is long - price set to: ${self.market_price:.2f}")
-            return self.market_price
-    
+                    ].iloc[0]
+                    min_sell_price = min(min_sell_price, float(curve['Intercept']))
+                    
+            price_drop = (position_ratio - STABILITY_THRESHOLD) * min_sell_price
+            new_price = max(self.floor_price, self.market_price - price_drop)
+            return min(new_price, current_ceiling)
+        
         needed_abatement = demand - supply
-        print(f"Market is short - need {needed_abatement:.2f} abatement")
-    
         clearing_prices = []
-        total_potential_abatement = 0
-    
+        
         for _, facility in self.facilities_data.iterrows():
             curve = self.abatement_cost_curve[
                 self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-            ]
-            if curve.empty:
-                continue
-    
-            curve = curve.iloc[0]
+            ].iloc[0]
             slope = float(curve['Slope'])
             intercept = float(curve['Intercept'])
             max_reduction = float(curve['Max Reduction (MTCO2e)'])
-    
+            
             if slope > 0:
                 clearing_prices.append(intercept)
-                max_price = intercept + (slope * max_reduction)
-                clearing_prices.append(min(max_price, current_ceiling_price))
-    
-                for pct in [0.25, 0.5, 0.75]:
-                    price = intercept + (slope * max_reduction * pct)
-                    if price < current_ceiling_price:
-                        clearing_prices.append(price)
-    
-                total_potential_abatement += max_reduction
-    
-        clearing_prices.append(current_ceiling_price)
+                max_price = min(intercept + (slope * max_reduction), current_ceiling)
+                clearing_prices.append(max_price)
+        
+        clearing_prices.append(current_ceiling)
         clearing_prices = sorted(set(clearing_prices))
-        print(f"\nTesting {len(clearing_prices)} price points...")
-        print(f"Total potential abatement: {total_potential_abatement:.2f}")
-    
-        best_price = current_ceiling_price
+        
+        best_price = current_ceiling
         min_excess_demand = float('inf')
-    
+        
         for price in clearing_prices:
             potential_abatement = 0
-    
             for _, facility in self.facilities_data.iterrows():
                 curve = self.abatement_cost_curve[
                     self.abatement_cost_curve['Facility ID'] == facility['Facility ID']
-                ]
-                if curve.empty:
-                    continue
-    
-                curve = curve.iloc[0]
+                ].iloc[0]
                 slope = float(curve['Slope'])
                 intercept = float(curve['Intercept'])
                 max_reduction = float(curve['Max Reduction (MTCO2e)'])
-    
+                
                 if slope > 0 and price > intercept:
-                    econ_abatement = min(
-                        max_reduction,
-                        (price - intercept) / slope
-                    )
+                    econ_abatement = min(max_reduction, (price - intercept) / slope)
                     potential_abatement += econ_abatement
-    
+            
             excess_demand = needed_abatement - potential_abatement
-            print(f"Price ${price:.2f} -> Abatement: {potential_abatement:.2f}, Excess demand: {excess_demand:.2f}")
-    
             if abs(excess_demand) < min_excess_demand:
                 min_excess_demand = abs(excess_demand)
                 best_price = price
-    
                 if excess_demand <= 0:
                     break
-    
-        self.market_price = min(best_price, current_ceiling_price)
-        print(f"\nFinal Market Determination:")
-        print(f"Clearing Price: ${self.market_price:.2f}")
-        print(f"Target Abatement: {needed_abatement:.2f}")
-        print(f"Best Excess Demand: {min_excess_demand:.2f}")
-    
-        return self.market_price
+        
+        price_increase = (position_ratio - STABILITY_THRESHOLD) * (best_price - self.market_price) 
+        new_price = min(self.market_price + price_increase, current_ceiling)
+        return max(self.floor_price, new_price) 
     
     def validate_market_price(self) -> bool:
         """Validate that the market price is within bounds."""
@@ -992,10 +1084,6 @@ class obamodel:
             return False
         if self.market_price < self.floor_price:
             print(f"ERROR: Market price ${self.market_price:.2f} below floor ${self.floor_price:.2f}")
-            return False
-        current_ceiling = self.calculate_price_ceiling(self.start_year)  # Get current ceiling
-        if self.market_price > current_ceiling:
-            print(f"ERROR: Market price ${self.market_price:.2f} above ceiling ${current_ceiling:.2f}")
             return False
         return True
       
@@ -1076,6 +1164,13 @@ class obamodel:
             intercept = float(curve['Intercept'])
             max_reduction = float(curve['Max Reduction (MTCO2e)'])
             
+            # Calculate cumulative abatement and adjust max reduction
+            cumulative_abatement = sum(
+                facility.get(f'Tonnes Abated_{prev_year}', 0) 
+                for prev_year in range(self.start_year, year)
+            )
+            adjusted_max_reduction = max(0, max_reduction - cumulative_abatement)
+            
             if self.market_price > intercept and slope > 0:
                 # Base economic abatement
                 economic_quantity = (self.market_price - intercept) / slope
@@ -1086,14 +1181,14 @@ class obamodel:
                     # Consider additional abatement for trading
                     if self.market_price > (intercept + slope * economic_quantity):
                         trading_potential = min(
-                            max_reduction - economic_quantity,
+                            adjusted_max_reduction - economic_quantity,
                             -initial_gap * 0.5  # Use up to 50% of surplus for additional abatement
                         )
                 
                 # Calculate target abatement including trading consideration
                 target_abatement = min(
                     economic_quantity + trading_potential,
-                    max_reduction,
+                    adjusted_max_reduction,
                     current_emissions,
                     # Ensure some facilities generate surplus for trading
                     current_emissions + max(-initial_gap, balance_share * 1.2)  # Allow 20% extra
@@ -1123,7 +1218,7 @@ class obamodel:
         print(f"Average Cost per Tonne: ${(total_cost/total_abatement if total_abatement > 0 else 0):.2f}")
         print(f"\nPost-Abatement Positions:")
         print(f"Total Short: {total_short:.2f}")
-        print(f"Total Long: {total_long:.2f}") 
+        print(f"Total Long: {total_long:.2f}")
             
     def _apply_abatement(self, idx: int, abated: float, cost: float, year: int) -> None:
         """
@@ -1145,78 +1240,7 @@ class obamodel:
         print(f"  Updated Surplus/Deficit: {self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}']:.2f}")
 
 
-    def _initialize_banking_columns(self) -> None:
-        """Initialize columns needed for banking."""
-        # Add banking columns for each year
-        for year in range(self.start_year, self.end_year + 1):
-            self.facilities_data[f'Banked_Allowances_{year}'] = 0.0
-            self.facilities_data[f'Banking_Decision_{year}'] = 0.0
-            self.facilities_data[f'Used_Banked_Allowances_{year}'] = 0.0
-
-    def calculate_banking_incentive(self, current_year: int, facility_id: str) -> float:
-        """
-        Calculate banking incentive based on price ceiling trajectory.
-        Returns value between 0 and 1 indicating banking attractiveness.
-        """
-        # Get current market conditions
-        current_price = self.market_price
-        current_ceiling = self.calculate_price_ceiling(current_year)
-        
-        # Look ahead one year
-        next_year_ceiling = self.calculate_price_ceiling(current_year + 1)
-        
-        # Calculate price gaps
-        ceiling_increase = next_year_ceiling - current_ceiling
-        current_headroom = current_ceiling - current_price
-        
-        # Banking is more attractive when:
-        # 1. Current price is well below ceiling (more room for appreciation)
-        # 2. Ceiling will increase significantly next year
-        # Normalize to 0-1 scale
-        price_gap_ratio = current_headroom / current_ceiling
-        ceiling_growth_ratio = ceiling_increase / current_ceiling
-        
-        # Combine factors (equal weights)
-        banking_incentive = 0.5 * price_gap_ratio + 0.5 * ceiling_growth_ratio
-        
-        # Cap between 0 and 1
-        return max(0.0, min(1.0, banking_incentive))
-
-    def make_banking_decision(self, year: int) -> None:
-        if year >= self.end_year:
-            return
-            
-        price_ceiling_ratio = self.market_price / self.calculate_price_ceiling(year)
-        banking_incentive = min(0.4, price_ceiling_ratio + 0.1)  # Lower base banking rate
-        
-        for idx, facility in self.facilities_data.iterrows():
-            surplus = facility[f'Allowance Surplus/Deficit_{year}']
-            if surplus <= 0:
-                continue
-                
-            bank_volume = surplus * banking_incentive
-            self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] += bank_volume
-            self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] -= bank_volume 
-
-    def use_banked_permits(self, year: int) -> None:
-        use_rate = min(0.9, self.market_price / self.calculate_price_ceiling(year))
-        
-        if use_rate < 0.3:  # Lower threshold for bank use
-            return
-            
-        for idx, facility in self.facilities_data.iterrows():
-            deficit = abs(min(0, facility[f'Allowance Surplus/Deficit_{year}']))
-            if deficit <= 0:
-                continue
-    
-            bank_balance = facility[f'New_Bank_Balance_{year}']
-            use_amount = min(bank_balance, deficit * use_rate)
-            
-            if use_amount > 0:
-                self.facilities_data.at[idx, f'New_Bank_Use_{year}'] = use_amount
-                self.facilities_data.at[idx, f'New_Bank_Balance_{year}'] -= use_amount
-                self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += use_amount
-                    
+  
 
 # 5. Trading Execution
     def evaluate_trade_profitability(self, buyer_id: str, seller_id: str, 
@@ -1301,6 +1325,9 @@ class obamodel:
         """Execute trades and return trading metrics."""
         print(f"\n=== TRADE EXECUTION - Year {year} ===")
         print(f"Market Price: ${self.market_price:.2f}")
+        
+        if self.market_price > self.calculate_price_ceiling(year):
+            self.market_price = self.calculate_price_ceiling(year)
     
         if not self.validate_market_price():
             print("ERROR: Invalid market price, cannot execute trades")
@@ -1322,9 +1349,9 @@ class obamodel:
             self.facilities_data[f'Allocations_{year}'] - 
             self.facilities_data[f'Emissions_{year}']
         )
-        
+    
         positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
-        
+    
         # Identify buyers (short positions) and sellers (long positions)
         buyers = self.facilities_data[positions < 0].copy()
         sellers = self.facilities_data[positions > 0].copy()
@@ -1344,114 +1371,57 @@ class obamodel:
         current_ceiling = self.calculate_price_ceiling(year)
         print(f"Current ceiling price: ${current_ceiling:.2f}")
     
-        # When below ceiling price, execute trades based on market price
-        if self.market_price < current_ceiling:
-            print("\nExecuting trades at market price (below ceiling)")
-            # Sort by volume to prioritize larger trades
-            buyers = buyers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=True)
-            sellers = sellers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=False)
+        # Allow trades at or below the ceiling price
+        print("\nExecuting trades at market price (at or below ceiling)")
+        buyers = buyers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=True)
+        sellers = sellers.sort_values(f'Allowance Surplus/Deficit_{year}', ascending=False)
     
-            for buyer_idx, buyer in buyers.iterrows():
-                buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
-                if buyer_demand < MIN_TRADE:
+        for buyer_idx, buyer in buyers.iterrows():
+            buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
+            if buyer_demand < MIN_TRADE:
+                continue
+    
+            print(f"\nBuyer {buyer['Facility ID']} demand: {buyer_demand:.4f}")
+    
+            for seller_idx, seller in sellers.iterrows():
+                seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
+                if seller_supply < MIN_TRADE:
                     continue
     
-                print(f"\nBuyer {buyer['Facility ID']} demand: {buyer_demand:.4f}")
+                print(f"Seller {seller['Facility ID']} supply: {seller_supply:.4f}")
     
-                for seller_idx, seller in sellers.iterrows():
-                    seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
-                    if seller_supply < MIN_TRADE:
-                        continue
-    
-                    print(f"Seller {seller['Facility ID']} supply: {seller_supply:.4f}")
-    
-                    # Calculate trade volume
-                    volume = min(buyer_demand, seller_supply)
-                    if volume < MIN_TRADE:
-                        continue
-    
-                    cost = volume * self.market_price
-    
-                    print(f"\nExecuting Trade:")
-                    print(f"Volume: {volume:.4f}")
-                    print(f"Price: ${self.market_price:.2f}")
-                    print(f"Cost: ${cost:.2f}")
-    
-                    # Update buyer
-                    self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += volume
-                    self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[buyer_idx, f'Allowance Purchase Cost_{year}'] += cost
-                    self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += cost
-    
-                    # Update seller
-                    self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-                    self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
-    
-                    total_volume += volume
-                    total_cost += cost
-    
-                    # Update remaining demand and supply
-                    buyer_demand -= volume
-                    sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-    
-                    if buyer_demand < MIN_TRADE:
-                        break
-        else:
-            # At ceiling price, consider MACs
-            print("\nAt ceiling price - using MAC-based trading")
-            # Sort buyers by highest MAC (most willing to buy)
-            buyers['MAC'] = buyers.apply(lambda x: self._get_facility_mac(x['Facility ID'], year), axis=1)
-            buyers = buyers.sort_values('MAC', ascending=False)
-    
-            # Sort sellers by lowest MAC (most willing to sell)
-            sellers['MAC'] = sellers.apply(lambda x: self._get_facility_mac(x['Facility ID'], year), axis=1)
-            sellers = sellers.sort_values('MAC')
-    
-            print(f"Average Buyer MAC: ${buyers['MAC'].mean():.2f}")
-            print(f"Average Seller MAC: ${sellers['MAC'].mean():.2f}")
-    
-            for _, buyer in buyers.iterrows():
-                buyer_demand = abs(buyer[f'Allowance Surplus/Deficit_{year}'])
-                if buyer_demand < MIN_TRADE:
+                # Calculate trade volume
+                volume = min(buyer_demand, seller_supply)
+                if volume < MIN_TRADE:
                     continue
     
-                buyer_mac = buyer['MAC']
-                print(f"\nBuyer {buyer['Facility ID']} MAC: ${buyer_mac:.2f}")
+                cost = volume * self.market_price
     
-                for seller_idx, seller in sellers.iterrows():
-                    seller_supply = seller[f'Allowance Surplus/Deficit_{year}']
-                    if seller_supply < MIN_TRADE:
-                        continue
+                print(f"\nExecuting Trade:")
+                print(f"Volume: {volume:.4f}")
+                print(f"Price: ${self.market_price:.2f}")
+                print(f"Cost: ${cost:.2f}")
     
-                    seller_mac = seller['MAC']
-                    print(f"Seller {seller['Facility ID']} MAC: ${seller_mac:.2f}")
+                # Update buyer
+                self.facilities_data.at[buyer_idx, f'Allowance Surplus/Deficit_{year}'] += volume
+                self.facilities_data.at[buyer_idx, f'Trade Volume_{year}'] += volume
+                self.facilities_data.at[buyer_idx, f'Allowance Purchase Cost_{year}'] += cost
+                self.facilities_data.at[buyer_idx, f'Trade Cost_{year}'] += cost
     
-                    # Only trade if economically beneficial at ceiling price
-                    if seller_mac >= buyer_mac:
-                        print("Trade not economic at ceiling price - skipping")
-                        continue
+                # Update seller
+                self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
+                self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
+                self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
     
-                    # Execute trade at ceiling price
-                    volume = min(buyer_demand, seller_supply)
-                    cost = volume * current_ceiling
+                total_volume += volume
+                total_cost += cost
     
-                    # Update positions and record trade
-                    self.facilities_data.at[buyer.name, f'Allowance Surplus/Deficit_{year}'] += volume
-                    self.facilities_data.at[buyer.name, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[buyer.name, f'Allowance Purchase Cost_{year}'] += cost
-                    self.facilities_data.at[buyer.name, f'Trade Cost_{year}'] += cost
+                # Update remaining demand and supply
+                buyer_demand -= volume
+                sellers.loc[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
     
-                    self.facilities_data.at[seller_idx, f'Allowance Surplus/Deficit_{year}'] -= volume
-                    self.facilities_data.at[seller_idx, f'Trade Volume_{year}'] += volume
-                    self.facilities_data.at[seller_idx, f'Allowance Sales Revenue_{year}'] += cost
-    
-                    total_volume += volume
-                    total_cost += cost
-    
-                    buyer_demand -= volume
-                    if buyer_demand < MIN_TRADE:
-                        break
+                if buyer_demand < MIN_TRADE:
+                    break
     
         # Verify final positions
         final_positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
@@ -1485,18 +1455,74 @@ class obamodel:
         except Exception as e:
             print(f"Warning: Error calculating MAC for facility {facility_id}: {str(e)}")
             return float('inf')  # Return high cost to discourage trading
-            
-    def apply_ceiling_price_compliance(self, year):
+
+    def initialize_historical_bank(self):
+        """Set up historical permit bank at start."""
+        total_allocations = self.facilities_data['Baseline Allocations'].sum()
+        
+        # Use self.historical_bank_share, falling back to scenario_params if needed
+        historical_share = getattr(self, 'historical_bank_share', self.scenario_params.get('historical_bank_share', 0))
+        min_price_ratio = getattr(self, 'min_bank_price_ratio', self.scenario_params.get('min_bank_price_ratio', 0))
+        
+        self.historical_bank = {
+            'volume': total_allocations * historical_share,
+            'vintage': self.start_year - 1,
+            'min_price': self.ceiling_price * min_price_ratio
+        }
+        
+        # Initialize first year balances
+        self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'] = (
+            self.facilities_data['Baseline Allocations'] / total_allocations * 
+            self.historical_bank['volume']
+        )
+
+    def use_historical_bank(self, year: int):
+        """Use banked permits for compliance when profitable."""
+        if year - self.historical_bank['vintage'] > self.scenario_params.get('vintage_limit', 0):
+            return
+    
+           
+        # Calculate deficits eligible for bank use
+        deficits = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
+        total_deficit = abs(deficits[deficits < 0].sum())
+        bank_use = min(total_deficit, self.historical_bank['volume'])
+    
+        # Allocate bank credits proportionally to facilities in deficit
+        if bank_use > 0:
+            for idx, facility in self.facilities_data[deficits < 0].iterrows():
+                share = abs(facility[f'Allowance Surplus/Deficit_{year}']) / total_deficit
+                allocation = bank_use * share
+                self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] += allocation
+                self.facilities_data.at[idx, f'Historical Bank Use_{year}'] = allocation
+    
+            self.historical_bank['volume'] -= bank_use
+
+    def apply_ceiling_price_compliance(self, year: int) -> None:
+        """Apply ceiling price compliance as last resort."""
         ceiling_price = self.calculate_price_ceiling(year)
-        for index, row in self.facilities_data.iterrows():
-            surplus_deficit = row[f'Allowance Surplus/Deficit_{year}']
-            if surplus_deficit < 0:
-                # Calculate payment required to cover deficit at ceiling price
-                payment = abs(surplus_deficit) * ceiling_price
-                self.facilities_data.at[index, f'Ceiling Price Payment_{year}'] = payment
-                self.facilities_data.at[index, f'Allowance Surplus/Deficit_{year}'] = 0  # Clear deficit
+        
+        if self.market_price >= ceiling_price:
+            for idx, facility in self.facilities_data.iterrows():
+                deficit = facility[f'Allowance Surplus/Deficit_{year}']
+                if deficit >= 0:
+                    continue
+                    
+                # Try banking first
+                banked_balance = (
+                    facility[f'Historical_Bank_Balance_{year}'] +
+                    facility[f'New_Bank_Balance_{year}']
+                )
                 
-        print(f"Year {year}: Applied ceiling price compliance")
+                bank_use = min(abs(deficit), banked_balance)
+                if bank_use > 0:
+                    deficit += bank_use
+                    # Update bank balances...
+                    
+                # Only use ceiling price for remaining deficit
+                if deficit < 0:
+                    payment = abs(deficit) * ceiling_price
+                    self.facilities_data.at[idx, f'Ceiling Price Payment_{year}'] = payment
+                    self.facilities_data.at[idx, f'Allowance Surplus/Deficit_{year}'] = 0    
 
 # 6. Cost Calculations
     def calculate_costs(self, year: int) -> None:
@@ -1568,24 +1594,13 @@ class obamodel:
 # 8. Data Analysis & Summary Creation Methods
 
     def _prepare_facility_results(self, start_year: int, end_year: int) -> pd.DataFrame:
-        """
-        Prepare facility-level results for the simulation period.
-        
-        Args:
-            start_year: First year of simulation
-            end_year: Last year of simulation
-            
-        Returns:
-            DataFrame containing facility results for all years
-        """
         results_data = []
         
         for year in range(start_year, end_year + 1):
             for _, facility in self.facilities_data.iterrows():
-                # Prepare base record
                 record = {
                     'Year': year,
-                    'Facility ID': facility['Facility ID'],
+                    'Facility ID': facility['Facility ID'], 
                     'Sector': facility['Sector'],
                     'Output': facility[f'Output_{year}'],
                     'Emissions': facility[f'Emissions_{year}'],
@@ -1594,12 +1609,22 @@ class obamodel:
                     'Allowance Surplus/Deficit': facility[f'Allowance Surplus/Deficit_{year}']
                 }
                 
-                # Add optional metrics with safe get()
+                # Add bank metrics
+                bank_metrics = [
+                    'Historical_Bank_Balance',
+                    'New_Bank_Balance', 
+                    'Historical_Bank_Use',
+                    'New_Bank_Use'
+                ]
+                for metric in bank_metrics:
+                    record[metric] = facility.get(f'{metric}_{year}', 0)
+                
+                # Add optional metrics
                 optional_metrics = [
                     'Tonnes Abated',
                     'Abatement Cost',
                     'Trade Volume',
-                    'Trade Cost',
+                    'Trade Cost', 
                     'Allowance Purchase Cost',
                     'Allowance Sales Revenue',
                     'Compliance Cost',
@@ -1607,21 +1632,18 @@ class obamodel:
                     'Cost to Profit Ratio',
                     'Cost to Output Ratio'
                 ]
-                
                 for metric in optional_metrics:
-                    metric_year = f'{metric}_{year}'
-                    record[metric] = float(facility.get(metric_year, 0))
+                    record[metric] = float(facility.get(f'{metric}_{year}', 0))
                 
                 results_data.append(record)
-        
-        # Create DataFrame and enforce float type for numeric columns
+    
         results_df = pd.DataFrame(results_data)
         
-        # Ensure non-string columns are float
+        # Convert numeric columns to float
         for col in results_df.columns:
             if col not in ['Year', 'Facility ID', 'Sector']:
                 results_df[col] = results_df[col].astype(float)
-        
+                
         return results_df
     
     def create_sector_summary(self, year: int) -> pd.DataFrame:
@@ -1804,13 +1826,12 @@ class obamodel:
             sold = facility[f'Allowance Sales Revenue_{year}'] > 0
             
             # Get banking information
-            banked_this_year = facility[f'Banking_Decision_{year}']
-            used_banked = facility[f'Used_Banked_Allowances_{year}']
-            total_banked = sum(
-                facility[col] 
-                for col in facility.index 
-                if col.startswith('Banked_Allowances_')
-            )
+            banking_decision_col = f'Banking_Decision_{year}'
+            banked_this_year = facility[banking_decision_col] if banking_decision_col in facility.index else 0
+            used_banked = facility[f'Used_Banked_Allowances_{year}'] if f'Used_Banked_Allowances_{year}' in facility.index else 0
+            total_banked = facility[f'Historical_Bank_Balance_{year}'] + facility[f'New_Bank_Balance_{year}']
+
+            
             
             # Calculate compliance status
             final_position = facility[f'Allowance Surplus/Deficit_{year}']
@@ -1884,32 +1905,35 @@ class obamodel:
         return report_df
     
     def generate_market_report(self, year: int) -> pd.DataFrame:
-        """
-        Generate a market report showing price, trading, and market balance information.
-        Added ceiling price compliance calculations.
-        """
-        print(f"\n=== Market Report for Year {year} ===")
-        
-        # Calculate key market metrics
+        """Generate market report with banking metrics."""
+        positions = (
+            self.facilities_data[f'Allocations_{year}'] - 
+            self.facilities_data[f'Emissions_{year}']
+        )
+        net_position = positions.sum()
+        total_short = abs(net_position) if net_position < 0 else 0
+        total_long = net_position if net_position > 0 else 0
+    
         total_emissions = self.facilities_data[f'Emissions_{year}'].sum()
         total_allocations = self.facilities_data[f'Allocations_{year}'].sum()
         total_abatement = self.facilities_data[f'Tonnes Abated_{year}'].sum()
         total_trade_volume = self.facilities_data[f'Trade Volume_{year}'].sum() / 2
-        total_banked = self.facilities_data[f'Banking_Decision_{year}'].sum()
-        total_used_banked = self.facilities_data[f'Used_Banked_Allowances_{year}'].sum()
         
-        # Calculate market positions
-        positions = self.facilities_data[f'Allowance Surplus/Deficit_{year}']
-        total_short = abs(positions[positions < 0].sum())
-        total_long = positions[positions > 0].sum()
+        # Banking metrics
+        total_hist_bank = self.facilities_data[f'Historical_Bank_Balance_{year}'].sum()
+        total_new_bank = self.facilities_data[f'New_Bank_Balance_{year}'].sum()
+        hist_bank_used = self.facilities_data[f'Historical_Bank_Use_{year}'].sum()
+        new_bank_used = self.facilities_data[f'New_Bank_Use_{year}'].sum()
         
-        # Calculate ceiling price metrics
         current_ceiling = self.calculate_price_ceiling(year)
         price_to_ceiling_ratio = self.market_price / current_ceiling if current_ceiling > 0 else 0
-        ceiling_volume = abs(positions[positions < 0].sum())  # Total short position
-        ceiling_value = ceiling_volume * current_ceiling
         
-        # Create market report dictionary
+        if self.market_price < current_ceiling:
+            ceiling_volume = ceiling_value = 0
+        else:
+            ceiling_volume = abs(positions[positions < 0].sum())
+            ceiling_value = ceiling_volume * current_ceiling
+    
         market_data = {
             'Year': year,
             'Market_Price': self.market_price,
@@ -1917,30 +1941,34 @@ class obamodel:
             'Price_Ceiling_Ratio': price_to_ceiling_ratio,
             'Total_Allocations': total_allocations,
             'Total_Emissions': total_emissions,
-            'Net_Position': total_allocations - total_emissions,
+            'Net_Position': net_position,
             'Total_Short_Position': total_short,
             'Total_Long_Position': total_long,
             'Total_Trade_Volume': total_trade_volume,
-            'Trading_Turnover_Rate': total_trade_volume/total_allocations if total_allocations > 0 else 0,
+            'Trading_Turnover_Rate': total_trade_volume / total_allocations if total_allocations > 0 else 0,
             'Total_Abatement': total_abatement,
-            'Abatement_Rate': total_abatement/total_emissions if total_emissions > 0 else 0,
-            'Newly_Banked_Allowances': total_banked,
-            'Used_Banked_Allowances': total_used_banked,
-            'Banking_Rate': total_banked/total_allocations if total_allocations > 0 else 0,
+            'Abatement_Rate': total_abatement / total_emissions if total_emissions > 0 else 0,
+            'Historical_Bank_Balance': total_hist_bank,
+            'New_Bank_Balance': total_new_bank,
+            'Historical_Bank_Use': hist_bank_used,
+            'New_Bank_Use': new_bank_used,
+            'Total_Bank_Balance': total_hist_bank + total_new_bank,
+            'Total_Bank_Use': hist_bank_used + new_bank_used,
+            'Banking_Rate': (total_hist_bank + total_new_bank) / total_allocations if total_allocations > 0 else 0,
             'Ceiling_Price_Volume': ceiling_volume,
             'Ceiling_Price_Value': ceiling_value
         }
         
-        # Create DataFrame
         report_df = pd.DataFrame([market_data])
         
-        # Print formatted report
         print("\nMARKET REPORT")
         print("=============")
         print(f"Market Price: ${market_data['Market_Price']:.2f}")
         print(f"Price Ceiling: ${market_data['Price_Ceiling']:.2f}")
         print(f"Price/Ceiling Ratio: {market_data['Price_Ceiling_Ratio']:.2%}")
         print(f"Total Trade Volume: {market_data['Total_Trade_Volume']:,.0f}")
+        print(f"Total Bank Balance: {market_data['Total_Bank_Balance']:,.0f}")
+        print(f"Total Bank Use: {market_data['Total_Bank_Use']:,.0f}")
         print(f"Ceiling Price Volume: {market_data['Ceiling_Price_Volume']:,.0f}")
         print(f"Ceiling Price Value: ${market_data['Ceiling_Price_Value']:,.2f}")
         
