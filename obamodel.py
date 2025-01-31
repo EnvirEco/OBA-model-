@@ -419,31 +419,7 @@ class obamodel:
         self.facilities_data[f'Historical_Bank_Use_{self.start_year}'] = 0.0
         self.facilities_data[f'New_Bank_Use_{self.start_year}'] = 0.0
 
-    def initialize_historical_bank(self):
-        """Set up historical permit bank at start."""
-        total_allocations = self.facilities_data['Baseline Allocations'].sum()
-        
-        # Use self.historical_bank_share, falling back to scenario_params if needed
-        historical_share = getattr(self, 'historical_bank_share', self.scenario_params.get('historical_bank_share', 0))
-        min_price_ratio = getattr(self, 'min_bank_price_ratio', self.scenario_params.get('min_bank_price_ratio', 0))
-        
-        self.historical_bank = {
-            'volume': total_allocations * historical_share,
-            'vintage': self.start_year - 1,
-            'min_price': self.ceiling_price * min_price_ratio
-        }
-        
-        # Initialize first year balances
-        self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'] = (
-            self.facilities_data['Baseline Allocations'] / total_allocations * 
-            self.historical_bank['volume']
-        )
-        
-        print(f"Initialized historical bank with volume: {self.historical_bank['volume']:.2f}")
-        print(f"Total allocations: {total_allocations:.2f}")
-        print(f"Historical bank share: {historical_share:.2f}")
-        print(f"Sum of Historical_Bank_Balance_{self.start_year}: {self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'].sum():.2f}")
-        
+           
     def run_model(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Execute model with banking capabilities."""
         print("\nExecuting emission trading model with banking...")
@@ -867,7 +843,6 @@ class obamodel:
             if deficit <= 0:
                 continue
 
-            # Use more bank as price rises
             use_rate = min(0.9, self.market_price / self.calculate_price_ceiling(year))
             target_use = deficit * use_rate
 
@@ -1513,25 +1488,29 @@ class obamodel:
             return float('inf')  # Return high cost to discourage trading
 
     def initialize_historical_bank(self):
-        """Set up historical permit bank at start."""
         total_allocations = self.facilities_data['Baseline Allocations'].sum()
-        
-        # Use self.historical_bank_share, falling back to scenario_params if needed
         historical_share = getattr(self, 'historical_bank_share', self.scenario_params.get('historical_bank_share', 0))
         min_price_ratio = getattr(self, 'min_bank_price_ratio', self.scenario_params.get('min_bank_price_ratio', 0))
         
+        historical_bank_volume = total_allocations * historical_share
+        
         self.historical_bank = {
-            'volume': total_allocations * historical_share,
+            'volume': historical_bank_volume,
             'vintage': self.start_year - 1,
             'min_price': self.ceiling_price * min_price_ratio
         }
         
-        # Initialize first year balances
+        # Set the initial balance for the start year
         self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'] = (
             self.facilities_data['Baseline Allocations'] / total_allocations * 
-            self.historical_bank['volume']
+            historical_bank_volume
         )
-
+        
+        print(f"Initialized historical bank with volume: {historical_bank_volume:.2f}")
+        print(f"Total allocations: {total_allocations:.2f}")
+        print(f"Historical bank share: {historical_share:.2f}")
+        print(f"Sum of Historical_Bank_Balance_{self.start_year}: {self.facilities_data[f'Historical_Bank_Balance_{self.start_year}'].sum():.2f}")
+    
     def use_historical_bank(self, year: int):
         """Use banked permits for compliance when profitable."""
         if year - self.historical_bank['vintage'] > self.scenario_params.get('vintage_limit', 0):
